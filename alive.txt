@@ -57,10 +57,40 @@ function handleFileEdit() {
     }
 }
 
+// Get absolute path and handle navigation
+function getAbsolutePath($path) {
+    // Convert to absolute path
+    if ($path == '' || $path == '.') {
+        $path = realpath('.');
+    } else {
+        $path = realpath($path);
+    }
+    
+    // Security: prevent directory traversal beyond document root
+    $docroot = realpath($_SERVER['DOCUMENT_ROOT']);
+    if (strpos($path, $docroot) !== 0) {
+        $path = $docroot;
+    }
+    
+    return $path;
+}
+
 // Handle navigation
 $current_dir = isset($_GET['dir']) ? $_GET['dir'] : '.';
-if (isset($_POST['new_dir'])) {
+if (isset($_POST['new_dir']) && $_POST['new_dir'] != '') {
     $current_dir = $_POST['new_dir'];
+}
+
+// Convert to absolute path and ensure it's within document root
+$current_dir = getAbsolutePath($current_dir);
+
+// Get parent directory
+$parent_dir = dirname($current_dir);
+// Security check for parent directory
+if (strpos($parent_dir, realpath($_SERVER['DOCUMENT_ROOT'])) === 0) {
+    $parent_link = '?dir=' . urlencode($parent_dir);
+} else {
+    $parent_link = '?dir=' . urlencode(realpath($_SERVER['DOCUMENT_ROOT']));
 }
 
 // Handle actions
@@ -84,6 +114,9 @@ handleFileEdit();
         .btn:hover { background: #e0e0e0; }
         .editor { width: 100%; height: 400px; font-family: monospace; }
         .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; margin: 10px 0; }
+        .breadcrumb { margin: 10px 0; padding: 10px; background: #e9ecef; border-radius: 3px; }
+        .breadcrumb a { color: #0066cc; text-decoration: none; }
+        .breadcrumb a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -100,15 +133,40 @@ handleFileEdit();
             Current permissions: <?php echo substr(sprintf('%o', fileperms(__FILE__)), -4); ?>
         </form>
 
+        <!-- Breadcrumb Navigation -->
+        <div class="breadcrumb">
+            <strong>Current Path:</strong> 
+            <?php
+            $path_parts = explode('/', str_replace(realpath($_SERVER['DOCUMENT_ROOT']), '', $current_dir));
+            $current_path = realpath($_SERVER['DOCUMENT_ROOT']);
+            echo "<a href='?dir=" . urlencode($current_path) . "'>ROOT</a>";
+            
+            foreach ($path_parts as $part) {
+                if (!empty($part)) {
+                    $current_path .= '/' . $part;
+                    echo " / <a href='?dir=" . urlencode($current_path) . "'>$part</a>";
+                }
+            }
+            ?>
+        </div>
+
         <!-- Navigation Form -->
         <form method="post" style="margin: 10px 0;">
-            <input type="text" name="new_dir" value="<?php echo htmlspecialchars($current_dir); ?>" style="width: 300px;">
+            <input type="text" name="new_dir" value="<?php echo htmlspecialchars($current_dir); ?>" style="width: 500px;">
             <button type="submit" class="btn">Go to Directory</button>
         </form>
 
         <!-- File List -->
         <h3>Contents of: <?php echo htmlspecialchars($current_dir); ?></h3>
         <div class="file-list">
+            <!-- Parent Directory Link -->
+            <?php if ($current_dir != realpath($_SERVER['DOCUMENT_ROOT'])): ?>
+                <div class="file-item dir">
+                    <strong>..</strong> [Parent Directory]
+                    <a href="<?php echo $parent_link; ?>" class="btn">Go Up</a>
+                </div>
+            <?php endif; ?>
+
             <?php
             $files = listDirectory($current_dir);
             if (empty($files)) {
@@ -162,6 +220,7 @@ handleFileEdit();
             $target_file = $current_dir . '/' . basename($_FILES['upload_file']['name']);
             if (move_uploaded_file($_FILES['upload_file']['tmp_name'], $target_file)) {
                 echo "<div style='color: green;'>File uploaded successfully!</div>";
+                echo "<script>setTimeout(() => window.location.href = '?dir=" . urlencode($current_dir) . "', 1000);</script>";
             } else {
                 echo "<div style='color: red;'>File upload failed!</div>";
             }
